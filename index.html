@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#1d4f91">
 <title>Lịch báo giảng</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=Noto+Serif:wght@600;700&display=swap">
 <style>
@@ -232,6 +234,9 @@ label.fld > span small { font-weight: 400; color: var(--muted); }
 .login-opt { border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 12px; align-content: start; }
 .login-opt h3 { display: flex; align-items: center; gap: 8px; }
 .err-text { color: var(--red); font-size: 13px; min-height: 18px; }
+.url-nho { color: var(--muted); word-break: break-all; font-size: 12px; }
+.callout code { font-size: 12px; word-break: break-all; }
+#lg-chan:empty { display: none; }
 
 /* ---------- tổng quan ---------- */
 .dash { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -536,8 +541,8 @@ table.tkb { border-collapse: separate; border-spacing: 0; width: 100%; min-width
 
 // ▶ Dán URL Web App của Apps Script vào đây để cố định máy chủ khi đưa lên GitHub.
 //   Để trống: màn hình đăng nhập sẽ hỏi địa chỉ máy chủ (lưu trên trình duyệt).
-const API_URL_MAC_DINH = 'https://script.google.com/macros/s/AKfycbwz5xtB6DExuyAGdKu523NMPq-nUhk8wAe8RhDUyqST-IYRqIfTqHoH3SthSJa7_t-pXw/exec';
-const PHIEN_BAN = '1.2.1';
+const API_URL_MAC_DINH = 'https://script.google.com/macros/s/AKfycbzvV5IXDi3z79oq9y8z-s8Lz9cvS80TOooMPAfkYDZVv_h8G3JnHBakBuq5vP6-7BD_/exec';
+const PHIEN_BAN = '1.1.2';
 
 /* ---------------- tiện ích chung ---------------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -848,14 +853,9 @@ async function docDocx(buf) {
           const pr = conTen(tc, 'tcPr')[0];
           const gs = pr && conTen(pr, 'gridSpan')[0];
           const span = gs ? parseInt(gs.getAttribute('w:val') || gs.getAttributeNS(gs.namespaceURI, 'val') || '1', 10) || 1 : 1;
-          const vm = pr && conTen(pr, 'vMerge')[0];
-          const noi = !!vm && (vm.getAttribute('w:val') || vm.getAttributeNS(vm.namespaceURI, 'val') || 'continue') !== 'restart';
           const text = conTen(tc, 'p').map(vanBanDoan).join('\n').trim();
-          return { text, span, noi: noi && !text };
+          return { text, span };
         }));
-        // ô gộp dọc (cột Tuần, Chủ đề… gộp nhiều dòng): các dòng dưới lấy chữ của ô đầu
-        const tren = [];
-        rows.forEach(r => { let cot = 0; r.forEach(c => { if (c.noi && tren[cot] != null) c.text = tren[cot]; else tren[cot] = c.text; cot += c.span || 1; }); });
         blocks.push({ type: 'tbl', rows });
       } else if (el.localName === 'sdt') { const c = conTen(el, 'sdtContent')[0]; if (c) duyet(c); }
     }
@@ -891,20 +891,13 @@ async function docXlsx(buf) {
         arr[ci] = { text: String(v).trim(), span: 1 };
       }
     }
-    // ô gộp: ô đầu mang span; ô gộp ngang bị che thì bỏ (không lệch cột); ô gộp dọc lấy chữ của ô đầu
-    const phu = new Set();
+    // ô gộp: đặt span cho ô đầu dòng
     for (const mc of hauDuTen(doc.documentElement, 'mergeCell')) {
       const [a, b] = mc.getAttribute('ref').split(':'); if (!b) continue;
-      const r1 = parseInt(a.replace(/[A-Z]+/, ''), 10) - 1, r2 = parseInt(b.replace(/[A-Z]+/, ''), 10) - 1, c1 = cotSo(a), c2 = cotSo(b);
-      const dau = grid[r1] && grid[r1][c1]; const txt = dau ? dau.text : '';
-      for (let r = r1; r <= r2; r++) {
-        grid[r] = grid[r] || [];
-        grid[r][c1] = { text: (grid[r][c1] && grid[r][c1].text) || txt, span: c2 - c1 + 1 };
-        for (let c = c1 + 1; c <= c2; c++) phu.add(r + ',' + c);
-      }
+      const r1 = parseInt(a.replace(/[A-Z]+/, ''), 10) - 1, c1 = cotSo(a), c2 = cotSo(b);
+      const row = grid[r1]; if (row && row[c1]) row[c1].span = c2 - c1 + 1;
     }
-    const rows = [];
-    grid.forEach((r, ri) => { if (!r) return; const out = []; for (let i = 0; i < r.length; i++) { if (phu.has(ri + ',' + i)) continue; out.push(r[i] || { text: '', span: 1 }); } rows.push(out); });
+    const rows = grid.filter(Boolean).map(r => { const out = []; for (let i = 0; i < r.length; i++) out[i] = r[i] || { text: '', span: 1 }; return out; });
     sheets.push({ name: sh.getAttribute('name'), rows });
   }
   return sheets;
@@ -1283,48 +1276,19 @@ function tachSo(s) {
   return out;
 }
 function chuanHoaTen(s) { return String(s || '').replace(/\s+/g, ' ').replace(/([^\s(])\(/g, '$1 (').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim(); }
-/** Tên bài viết IN HOA toàn bộ → viết thường, hoa chữ đầu, giữ số La Mã sau "kì/kỳ" (KIỂM TRA GIỮA HỌC KÌ I → Kiểm tra giữa học kì I) */
-function boInHoa(s) {
-  s = String(s || '');
-  if (!/\s/.test(s.trim()) || s !== s.toLocaleUpperCase('vi') || s === s.toLocaleLowerCase('vi')) return s;   // chữ viết tắt một từ (HĐTN) giữ nguyên
-  const t = s.toLocaleLowerCase('vi').replace(/(k[ìỳiy])\s+(ii|i)(?![\p{L}\d])/gu, (m, a, b) => a + ' ' + b.toUpperCase());
-  return t.charAt(0).toLocaleUpperCase('vi') + t.slice(1);
-}
-/** Tên chuẩn của các môn thường gặp (khi tên lấy từ tên file không dấu) */
-const TEN_MON_CHUAN = { 'tin hoc': 'Tin học', 'toan': 'Toán', 'ngu van': 'Ngữ văn', 'tieng anh': 'Tiếng Anh', 'khoa hoc tu nhien': 'Khoa học tự nhiên', 'khtn': 'Khoa học tự nhiên',
-  'lich su va dia li': 'Lịch sử và Địa lí', 'lich su va dia ly': 'Lịch sử và Địa lí', 'lich su': 'Lịch sử', 'dia li': 'Địa lí', 'dia ly': 'Địa lí', 'giao duc cong dan': 'Giáo dục công dân', 'gdcd': 'Giáo dục công dân',
-  'cong nghe': 'Công nghệ', 'am nhac': 'Âm nhạc', 'mi thuat': 'Mĩ thuật', 'my thuat': 'Mĩ thuật', 'giao duc the chat': 'Giáo dục thể chất', 'gdtc': 'Giáo dục thể chất', 'tri tue nhan tao': 'Trí tuệ nhân tạo',
-  'hoat dong trai nghiem huong nghiep': 'Hoạt động trải nghiệm, hướng nghiệp', 'hdtn': 'Hoạt động trải nghiệm, hướng nghiệp', 'giao duc dia phuong': 'Giáo dục địa phương', 'noi dung giao duc dia phuong': 'Giáo dục địa phương',
-  'vat li': 'Vật lí', 'vat ly': 'Vật lí', 'hoa hoc': 'Hóa học', 'sinh hoc': 'Sinh học' };
-/** "tin hoc 8" → "Tin học 8"; "Tiếng anh 6" → "Tiếng Anh 6" */
-function chuanTenMon(t) {
-  const m = String(t || '').replace(/\s+/g, ' ').trim().match(/^(.*?)[\s,\-–]*(\d{1,2})?$/);
-  const goc = (m[1] || '').trim(), so = m[2] || '';
-  const k = boDau(goc).replace(/[^a-z0-9]+/g, ' ').trim();
-  const ten = TEN_MON_CHUAN[k] || (goc ? goc.charAt(0).toLocaleUpperCase('vi') + goc.slice(1) : '');
-  return (ten + (so ? ' ' + so : '')).trim();
-}
-/** Tên môn từ tên file: "PPCT_Tin_hoc_8_V1.docx" → "Tin học 8" (bỏ PPCT, số phiên bản, năm học, "lớp") */
-function tenMonTuFile(tenFile) {
-  let t = String(tenFile || '').replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ').replace(/(?<!\d)-|-(?!\d)/g, ' ').replace(/\s+/g, ' ').trim();
-  t = t.replace(/^(ppct|phân phối chương trình|phan phoi chuong trinh|kế hoạch dạy học|ke hoach day hoc|khdh)\b[\s\-–:]*/i, '');
-  for (let i = 0; i < 4; i++) t = t.replace(/[\s\-–]*(\(\d+\)|v\s?\d+(\.\d+)?|ver\s?\d+|b[ảa]n\s?\d+|final|copy|m[ớo]i|\d{4}\s*[-–]\s*\d{4}|n[ăa]m h[ọo]c.*)$/i, '').trim();
-  t = t.replace(/[\s,\-–]+(?:(?:kh[ốo]i|l[ớo]p)\s*)+(\d{1,2})$/i, ' $1');
-  return chuanTenMon(t);
-}
 function laHocKy(t) {
   const a = boDau(t); const m = a.match(/^(?:hoc ky|hoc ki|hk)\s*(ii|i|2|1)\b/);
   if (!m || /tuan\s*x|=/.test(a)) return null;
   return /ii|2/.test(m[1]) ? 'II' : 'I';
 }
-const RE_TIEU_DE = /(?:ph[âa]n\s+ph[ốo]i\s+ch[ươuo]+ng\s+tr[ìi]nh|k[ếe]\s+ho[ạa]ch\s+d[ạa]y\s+h[ọo]c)\s*(?:m[ôo]n\s*)?[:\-–]?\s*(.+)/i;
+const RE_TIEU_DE = /ph[âa]n\s+ph[ốo]i\s+ch[ươuo]+ng\s+tr[ìi]nh\s*(?:m[ôo]n\s*)?[:\-–]?\s*(.+)/i;
 function timCot(L) {
-  const a = L.map(x => boDau(x).replace(/\(\s*\d+\s*\)/g, ' ').replace(/[()\[\].:*]/g, ' ').replace(/\s+/g, ' ').trim());
+  const a = L.map(boDau);
   const f = fn => a.findIndex(fn);
   const tiet = f(t => /^(tiet|tiet so|tiet thu|tiet ppct|so tiet ppct|thu tu tiet|tiet theo ppct|ppct|stt tiet)$/.test(t) || /^tiet (so|thu|ppct)\b/.test(t));
   const soTiet = f(t => /^so tiet$/.test(t));
   const ten = f(t => /(ten bai|bai hoc|bai day|noi dung|ten chu de|^bai$|chu de\/bai)/.test(t) && !/yeu cau|so tiet/.test(t));
-  const tuan = f(t => /^(tuan|thoi diem)\b/.test(t));
+  const tuan = f(t => /^tuan\b/.test(t));
   const ghiChu = f(t => /ghi chu/.test(t));
   const chuDe = f(t => /^(chu de|chuong|mach noi dung|chuong\/chu de|chu de\/chuong)$/.test(t));
   const hk = f(t => /^(hoc ky|hoc ki|hk)$/.test(t));
@@ -1335,22 +1299,18 @@ const moRong = r => { const L = []; (r || []).forEach(c => { L.push((c && c.text
 function tenMonTuTieuDe(t) {
   t = String(t || '').replace(/n[ăa]m\s+h[ọo]c.*$/i, '').replace(/[.:]+$/, '').trim();
   if (!t) return '';
-  const low = t.toLocaleLowerCase('vi').replace(/^m[ôo]n\s+/, '').replace(/[\s,\-–]+(?:(?:kh[ốo]i|l[ớo]p)\s*)+(\d{1,2})\s*$/, ' $1');
-  return chuanTenMon(low);
+  const low = t.toLocaleLowerCase('vi');
+  return low.charAt(0).toLocaleUpperCase('vi') + low.slice(1);
 }
 /** blocks: [{type:'p',text} | {type:'tbl',rows:[[{text,span}]]}] */
 function phanTichPPCT(blocks, tenFile = '') {
   const hk2 = CFG().hk2TuTuan;
   let tieuDe = '', tongTieuDe = null, cot = null, hocKy = '', chuDe = '', dem = 0, chuanHoa = 0;
-  const bai = [], hkTong = {};
+  const bai = [];
   const xetTieuDe = txt => {
     const t = String(txt || '').replace(/\s+/g, ' ').trim(); if (!t) return;
     const m = t.match(RE_TIEU_DE); if (m && !tieuDe) tieuDe = m[1].trim();
-    const a = boDau(t);
-    const m2 = a.match(/ca nam.*?=\s*(\d+)\s*tiet/) || a.match(/thoi luong\s*:?\s*(\d+)\s*tiet/) || a.match(/(\d+)\s*tiet\s*\/\s*nam/);
-    if (m2 && tongTieuDe == null) tongTieuDe = +m2[1];
-    const m3 = a.match(/(?:hoc ky|hoc ki|hk)\s*(ii|i|2|1)\b[^=|]*?[=|]\s*(\d+)\s*tiet/);   // "Học kỳ I. … = 18 tiết" hoặc bảng "Học kì I | 18 tiết"
-    if (m3) { const k = /ii|2/.test(m3[1]) ? 'II' : 'I'; if (hkTong[k] == null) hkTong[k] = +m3[2]; }
+    const m2 = boDau(t).match(/ca nam.*?=\s*(\d+)\s*tiet/); if (m2 && tongTieuDe == null) tongTieuDe = +m2[1];
   };
   for (const b of blocks) {
     if (b.type === 'p') {
@@ -1364,7 +1324,7 @@ function phanTichPPCT(blocks, tenFile = '') {
       const L = moRong(r); const khac = [...new Set(L.filter(Boolean))];
       if (!khac.length) continue;
       const hd = timCot(L); if (hd) { cot = hd; continue; }
-      if (!cot) { khac.forEach(xetTieuDe); xetTieuDe(khac.join(' | ')); continue; }
+      if (!cot) { khac.forEach(xetTieuDe); continue; }
       const tietTxt = cot.tiet >= 0 ? (L[cot.tiet] || '') : '';
       let so = RE_SO.test(boDau(tietTxt)) ? tachSo(tietTxt) : [];
       const ten = (L[cot.ten] || '').trim();
@@ -1385,7 +1345,7 @@ function phanTichPPCT(blocks, tenFile = '') {
       so.forEach((t, k) => {
         let tenK = ten.replace(/\s+/g, ' ');
         if (laDem && so.length > 1) tenK += ` (tiết ${k + 1}/${so.length})`;
-        const ch = boInHoa(chuanHoaTen(tenK)); if (ch !== tenK) chuanHoa++;
+        const ch = chuanHoaTen(tenK); if (ch !== tenK) chuanHoa++;
         bai.push({ tiet: t, tuan: tuanArr.length === so.length ? tuanArr[k] : (tuanArr[0] ?? null), hocKy, chuDe, ten: ch, ghiChu: cot.ghiChu >= 0 ? (L[cot.ghiChu] || '') : '' });
       });
       dem = Math.max(dem, ...so);
@@ -1395,18 +1355,11 @@ function phanTichPPCT(blocks, tenFile = '') {
   const maxT = bai.length ? bai[bai.length - 1].tiet : 0;
   bai.forEach(x => { if (!x.hocKy) x.hocKy = x.tuan ? (x.tuan >= hk2 ? 'II' : 'I') : (x.tiet <= Math.ceil(maxT * 18 / 35) ? 'I' : 'II'); });
   let ten = tenMonTuTieuDe(tieuDe);
-  if (!ten) ten = tenMonTuFile(tenFile);
-  let khoi = (ten.match(/(\d{1,2})$/) || tieuDe.match(/(?:l[ớo]p|kh[ốo]i)\s*(\d{1,2})\b/i) || [])[1] || '';
-  if (!(+khoi >= 1 && +khoi <= 12)) khoi = '';
-  return { ten, khoi, bai, tongTieuDe, hkTong, chuanHoa, coBang: !!cot, tenTuFile: !tieuDe };
+  if (!ten) ten = String(tenFile).replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ').replace(/^ppct\s*/i, '').trim();
+  const khoi = (ten.match(/(\d{1,2})\s*$/) || tieuDe.match(/(\d{1,2})\b/) || [])[1] || '';
+  return { ten, khoi, bai, tongTieuDe, chuanHoa, coBang: !!cot };
 }
-/** Phần tên bài dùng để so các tiết của cùng một bài: bỏ (T1), (TT), – Tiết 2, dấu chấm cuối; coi mọi loại gạch ngang là một */
-function gocTenBai(s) {
-  let t = String(s || '').trim();
-  for (let i = 0; i < 3; i++) t = t.replace(/\s*[.;,]+\s*$/, '').replace(/\s*[(\[]\s*(tt|tiếp theo|tiếp|t\s*\d+|tiết\s*\d+[^)\]]*)\s*[)\]]\s*$/i, '').replace(/\s*[–—-]\s*tiết\s*\d+(\s*\/\s*\d+)?\s*$/i, '').trim();
-  return t;
-}
-function kiemTraPPCT(bai, tongTieuDe, hkTong) {
+function kiemTraPPCT(bai, tongTieuDe) {
   const cb = [];
   const dem = new Map(); bai.forEach(b => dem.set(b.tiet, (dem.get(b.tiet) || 0) + 1));
   const trung = [...dem].filter(([, v]) => v > 1).map(([k]) => k);
@@ -1417,19 +1370,13 @@ function kiemTraPPCT(bai, tongTieuDe, hkTong) {
   if (tongTieuDe && tongTieuDe !== bai.length) cb.push({ muc: 'warn', nd: `Tiêu đề ghi cả năm ${tongTieuDe} tiết nhưng bảng có ${bai.length} tiết` });
   const nhom = new Map();
   bai.forEach(b => {
-    const m = b.ten.match(/^B[àa]i\s*(\d+[a-zđ]?)\s*[.:\-–]?\s*(.*)$/i); if (!m) return;
-    const goc = gocTenBai(m[2]);
-    const k = m[1].toLowerCase(); if (!nhom.has(k)) nhom.set(k, []); nhom.get(k).push({ tiet: b.tiet, goc });
+    const m = b.ten.match(/^B[àa]i\s*(\d+)\s*[.:\-–]?\s*(.*)$/i); if (!m) return;
+    const goc = m[2].replace(/\s*\((tt|tiếp theo|tiếp|tiết\s*\d+[^)]*)\)\s*$/i, '').trim();
+    if (!nhom.has(m[1])) nhom.set(m[1], []); nhom.get(m[1]).push({ tiet: b.tiet, goc });
   });
-  const soKhop = s => boDau(s).replace(/[–—-]/g, '-').replace(/\s*-\s*/g, ' - ').replace(/\s+/g, ' ');
   for (const [k, arr] of nhom) {
-    if (new Set(arr.map(x => soKhop(x.goc))).size > 1) cb.push({ muc: 'warn', nd: `Bài ${k} có tên không thống nhất: ` + arr.map(x => `tiết ${x.tiet} “${x.goc}”`).join(' · ') });
+    if (new Set(arr.map(x => boDau(x.goc))).size > 1) cb.push({ muc: 'warn', nd: `Bài ${k} có tên không thống nhất: ` + arr.map(x => `tiết ${x.tiet} “${x.goc}”`).join(' · ') });
   }
-  if (hkTong) ['I', 'II'].forEach(k => { const n = bai.filter(b => b.hocKy === k).length; if (hkTong[k] != null && n && n !== hkTong[k]) cb.push({ muc: 'warn', nd: `Học kỳ ${k}: phần đầu file ghi ${hkTong[k]} tiết nhưng bảng có ${n} tiết` }); });
-  bai.forEach(b => {
-    const m = boDau(b.ten).match(/\b(giua|cuoi)\s+(hoc\s+)?k[yi]\s+(ii|i)\b/);
-    if (m && b.hocKy && (m[3] === 'ii' ? 'II' : 'I') !== b.hocKy) cb.push({ muc: 'warn', nd: `Tiết ${b.tiet} thuộc học kỳ ${b.hocKy} nhưng tên bài ghi “${b.ten}” — có thể gõ nhầm học kỳ` });
-  });
   let truoc = 0;
   for (const b of bai) { if (b.tuan && b.tuan < truoc) { cb.push({ muc: 'warn', nd: `Cột tuần không tăng dần ở tiết ${b.tiet} (tuần ${b.tuan} sau tuần ${truoc})` }); break; } if (b.tuan) truoc = b.tuan; }
   const rong = bai.filter(b => !b.ten).map(b => b.tiet); if (rong.length) cb.push({ muc: 'err', nd: `Tiết chưa có tên bài: ${rong.join(', ')}` });
@@ -1505,8 +1452,8 @@ Quy ước thường gặp:
 
 Chỉ trả về JSON đúng mẫu, không giải thích:
 {"tieuDe":"", "giaoVien":"", "ngayApDung":"YYYY-MM-DD", "o":[{"buoi":"S","thu":2,"tiet":1,"lop":"9A9","phong":"9A30","mon":""}]}`;
-// Thứ tự thử: mô hình chính → bản Lite (nhanh, ít bị quá tải) → các mô hình khác. Lỗi 429/5xx: chờ rồi thử lại, sau đó chuyển mô hình.
-const MODEL_DU_PHONG = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
+// Thứ tự thử: mô hình mới → cũ hơn → bản Lite (ít bị quá tải hơn). Lỗi 429/5xx: chờ rồi thử lại, sau đó chuyển mô hình.
+const MODEL_DU_PHONG = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-latest', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
 const LOI_TAM_THOI = new Set([408, 429, 500, 502, 503, 504]);
 /** Thông điệp lỗi Gemini dễ hiểu */
 function loiGeminiDeHieu(code, msg) {
@@ -1535,20 +1482,20 @@ function chuanHoaAI(kq) {
   }
   return { ngayApDung: D.hopLe(kq.ngayApDung) ? kq.ngayApDung : '', tieuDe: kq.tieuDe || '', giaoVien: kq.giaoVien || '', o };
 }
-/** Gọi Gemini trực tiếp từ trình duyệt. Dùng thử: khóa lưu trên máy này. Máy chủ: khóa do máy chủ gửi cho admin đã đăng nhập. */
-async function goiGemini(dataUrl, key, model, baoTienDo, gioiHan = 120e3) {
+/** Gọi Gemini trực tiếp từ trình duyệt (chỉ dùng ở chế độ dùng thử, khóa lưu trên máy này) */
+async function goiGemini(dataUrl, key, model, baoTienDo) {
   const m = String(dataUrl).match(/^data:(image\/[\w+.-]+);base64,(.+)$/);
   if (!m) throw new Error('Ảnh không hợp lệ');
   const daThu = [], batDau = Date.now();
   const body = JSON.stringify({ contents: [{ role: 'user', parts: [{ inline_data: { mime_type: m[1], data: m[2] } }, { text: PROMPT_TKB }] }], generationConfig: { responseMimeType: 'application/json' } });
   for (const md of [...new Set([model, ...MODEL_DU_PHONG].filter(Boolean))]) {
     for (let lan = 1; lan <= 2; lan++) {
-      if (Date.now() - batDau > gioiHan) break;
+      if (Date.now() - batDau > 120e3) break;
       if (baoTienDo) baoTienDo(`Đang thử ${md}${lan > 1 ? ' (lần ' + lan + ')' : ''}…`);
       let res;
       try {
         res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(md)}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body });
-      } catch (e) { const x = new Error('Trình duyệt không kết nối được Gemini (kiểm tra mạng).'); x.mang = true; throw x; }
+      } catch (e) { throw new Error('Không kết nối được Gemini (kiểm tra mạng).'); }
       const j = await res.json().catch(() => ({}));
       const msg = (j.error && j.error.message) || '';
       if (res.ok) {
@@ -1558,7 +1505,7 @@ async function goiGemini(dataUrl, key, model, baoTienDo, gioiHan = 120e3) {
       }
       if (res.status === 404 || /not found|not supported/i.test(msg)) { daThu.push(md + ': không có'); break; }
       if (LOI_TAM_THOI.has(res.status)) { daThu.push(md + ': ' + res.status); if (lan === 1) { await new Promise(r => setTimeout(r, 2500)); continue; } break; }
-      const x = new Error(loiGeminiDeHieu(res.status, msg)); x.maHttp = res.status; throw x;
+      throw new Error(loiGeminiDeHieu(res.status, msg));
     }
   }
   const moHinh = [...new Set(daThu.map(x => x.split(':')[0]))];
@@ -1566,8 +1513,69 @@ async function goiGemini(dataUrl, key, model, baoTienDo, gioiHan = 120e3) {
   e.quaTai = true; throw e;
 }
 
+/* ---------------- địa chỉ máy chủ & chẩn đoán ---------------- */
+/** Địa chỉ máy chủ đang dùng: địa chỉ đổi trên máy này (nếu có) được ưu tiên hơn địa chỉ ghi trong index.html */
+function diaChiMayChu() { return API_URL_MAC_DINH ? (LS.get('lbg_api_rieng') || API_URL_MAC_DINH) : (LS.get('lbg_api') || ''); }
+function luuDiaChiMayChu(url) {
+  if (API_URL_MAC_DINH) { if (url === API_URL_MAC_DINH) LS.del('lbg_api_rieng'); else LS.set('lbg_api_rieng', url); }
+  else { LS.set('lbg_api', url); LS.set('lbg_mode', 'gas'); }
+  Store.url = url;
+}
+const rutGonUrl = u => { u = String(u || ''); return u.length > 64 ? u.slice(0, 46) + '…' + u.slice(-14) : u; };
+function dinhDangUrl(u) {
+  u = String(u || '').trim();
+  if (/^https:\/\/script\.google\.com\/(a\/macros\/[^/]+|macros)\/s\/[\w-]{20,}\/exec$/.test(u)) return 'ok';
+  if (/\/dev\/?$/.test(u)) return 'dev';
+  if (/script\.google\.com\/.*\/edit/.test(u) || /\/home\/projects\//.test(u)) return 'editor';
+  return 'sai';
+}
+const MSG_DOI_DANG_NHAP = 'Google đòi đăng nhập khi gọi máy chủ: Web App chưa để "Người có quyền truy cập: Bất kỳ ai" (đang là "Chỉ mình tôi" hoặc "Bất kỳ ai có Tài khoản Google"), hoặc "Thực thi với tư cách" chưa là "Tôi". Sửa trong Apps Script › Triển khai › Quản lý triển khai › Chỉnh sửa.';
+const biChuyenDangNhap = res => !!(res && res.redirected && /accounts\.google\.com|ServiceLogin|signin/i.test(res.url || ''));
+function loiHttp(st) {
+  if (st === 404) return 'Google không mở được Web App ở địa chỉ này (lỗi 404). Thường do quyền truy cập chưa là "Bất kỳ ai" (Google đòi đăng nhập), hoặc URL sai / bản triển khai đã bị lưu trữ. Bấm "Kiểm tra máy chủ" bên dưới để xem chi tiết.';
+  if (st === 401 || st === 403) return 'Máy chủ từ chối truy cập (lỗi ' + st + '): Web App chưa để "Người có quyền truy cập: Bất kỳ ai".';
+  if (st >= 500) return 'Máy chủ Google Apps Script đang lỗi tạm thời (lỗi ' + st + '). Thử lại sau ít phút.';
+  return 'Máy chủ trả lỗi ' + st + '.';
+}
+const soPhienBan = v => String(v || '0').split('.').map(Number);
+/** Kiểm tra một địa chỉ máy chủ, trả về danh sách {muc:'ok'|'warn'|'err', nd(html)}; .dungMayChu = máy chủ Lịch báo giảng trả lời được */
+async function kiemTraMayChu(url) {
+  url = String(url || '').trim(); const kq = []; kq.dungMayChu = false;
+  if (!url) { kq.push({ muc: 'err', nd: 'Chưa có địa chỉ máy chủ.' }); return kq; }
+  const dd = dinhDangUrl(url);
+  kq.push(dd === 'ok' ? { muc: 'ok', nd: 'Địa chỉ đúng dạng Web App: <code>' + esc(rutGonUrl(url)) + '</code>' }
+    : dd === 'dev' ? { muc: 'err', nd: 'Đang dùng URL <b>/dev</b> (bản thử, chỉ tác giả mở được). Cần URL kết thúc bằng <b>/exec</b> trong Triển khai › Quản lý triển khai.' }
+    : dd === 'editor' ? { muc: 'err', nd: 'Đây là địa chỉ trang soạn code Apps Script, không phải Web App. Cần URL dạng https://script.google.com/macros/s/…/exec.' }
+    : { muc: 'warn', nd: 'Địa chỉ không giống dạng thường gặp https://script.google.com/macros/s/…/exec: <code>' + esc(rutGonUrl(url)) + '</code>' });
+  let res;
+  try { res = await fetch(url, { method: 'GET', redirect: 'follow' }); }
+  catch (e) { kq.push({ muc: 'err', nd: 'Không gọi được máy chủ. Nếu mạng bình thường thì gần như chắc chắn <b>Google đang đòi đăng nhập</b>: Web App chưa để <b>Người có quyền truy cập: Bất kỳ ai</b> hoặc <b>Thực thi với tư cách</b> chưa là <b>Tôi</b>. Sửa trong Apps Script › Triển khai › Quản lý triển khai › ✎ Chỉnh sửa › Phiên bản mới. Nếu không có lựa chọn "Bất kỳ ai" (tài khoản trường học bị chặn), hãy triển khai bằng tài khoản Gmail cá nhân.' }); return kq; }
+  const huongDanQuyen = 'Mở Apps Script › <b>Triển khai › Quản lý triển khai</b> › chọn bản Ứng dụng web › <b>✎ Chỉnh sửa</b>: <b>Thực thi với tư cách: Tôi</b>; <b>Người có quyền truy cập: Bất kỳ ai</b> (không chọn "Bất kỳ ai có Tài khoản Google") › Phiên bản: Phiên bản mới › Triển khai. URL giữ nguyên.';
+  if (biChuyenDangNhap(res)) { kq.push({ muc: 'err', nd: '<b>Google đòi đăng nhập</b> khi gọi địa chỉ này, nên trang GitHub không vào được. ' + huongDanQuyen }); return kq; }
+  if (!res.ok) {
+    kq.push({ muc: 'err', nd: res.status === 404
+      ? '<b>Lỗi 404 — Google không mở được Web App ở địa chỉ này.</b> Kiểm tra 2 việc: (1) ' + huongDanQuyen + ' (2) Nếu vẫn lỗi: bản triển khai phải đang hoạt động (không nằm trong mục Đã lưu trữ) và URL chép đúng; nếu từng bấm "Triển khai mới" thì URL đã đổi.'
+      : esc(loiHttp(res.status)) });
+    return kq;
+  }
+  let j; try { j = await res.json(); } catch { kq.push({ muc: 'err', nd: 'Máy chủ trả về trang web thay vì dữ liệu: quyền truy cập chưa là <b>Bất kỳ ai</b>, hoặc Code.gs chưa được dán/lưu trước khi triển khai.' }); return kq; }
+  if (!j || !j.ok || !j.data || !/Lịch báo giảng/.test(j.data.ten || '')) { kq.push({ muc: 'err', nd: 'Địa chỉ này trả lời, nhưng không phải máy chủ Lịch báo giảng (Code.gs khác).' }); return kq; }
+  kq.dungMayChu = true;
+  kq.push({ muc: 'ok', nd: 'Máy chủ Lịch báo giảng trả lời, phiên bản <b>' + esc(j.data.phienBan) + '</b>.' });
+  const [a1, a2] = soPhienBan(j.data.phienBan), [b1, b2] = soPhienBan(PHIEN_BAN);
+  if (a1 < b1 || (a1 === b1 && a2 < b2)) kq.push({ muc: 'warn', nd: 'Máy chủ cũ hơn webapp (' + esc(PHIEN_BAN) + '). Dán Code.gs mới rồi <b>Triển khai › Quản lý triển khai › Chỉnh sửa › Phiên bản mới</b>.' });
+  try {
+    const r = await fetch(url, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'ping' }) });
+    const p = await r.json(); const d = p.data || {};
+    kq.push(d.coMatKhau ? { muc: 'ok', nd: 'Đã đặt mật khẩu quản trị.' } : { muc: 'err', nd: 'Máy chủ <b>chưa đặt mật khẩu</b>: mở Google Sheet › menu Lịch báo giảng › Đặt mật khẩu quản trị.' });
+    if ('coKhoaAI' in d) kq.push(d.coKhoaAI ? { muc: 'ok', nd: 'Đã cài khóa Gemini API.' } : { muc: 'warn', nd: 'Chưa cài khóa Gemini API (vẫn nhập TKB tay được).' });
+  } catch { kq.push({ muc: 'err', nd: 'Máy chủ nhận yêu cầu xem (GET) nhưng không nhận gửi dữ liệu (POST). Kiểm tra Code.gs có hàm doPost và đã triển khai phiên bản mới.' }); }
+  return kq;
+}
+const veChanDoan = kq => `<div class="stack-sm">${kq.map(x => `<div class="callout ${x.muc === 'ok' ? 'ok' : x.muc === 'warn' ? 'warn' : 'err'}">${ic(x.muc === 'ok' ? 'check' : x.muc === 'warn' ? 'info' : 'alert')}<div>${x.nd}</div></div>`).join('')}</div>`;
+
 const Store = {
-  cheDo: null, url: '', token: '', anh: new Map(), khoaAI: null,
+  cheDo: null, url: '', token: '', anh: new Map(),
   get mayChu() { return this.cheDo === 'gas'; },
 
   async goi(action, payload = {}) {
@@ -1575,9 +1583,10 @@ const Store = {
     let res;
     try {
       res = await fetch(this.url, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action, token: this.token, ...payload }) });
-    } catch (e) { throw new Error('Không kết nối được máy chủ. Kiểm tra mạng hoặc địa chỉ Web App.'); }
-    if (!res.ok) throw new Error('Máy chủ trả lỗi ' + res.status);
-    let j; try { j = await res.json(); } catch { throw new Error('Máy chủ trả dữ liệu không hợp lệ. Kiểm tra lại URL Web App (phải kết thúc bằng /exec) và quyền truy cập "Bất kỳ ai".'); }
+    } catch (e) { const er = new Error('Không kết nối được máy chủ. Kiểm tra mạng; nếu mạng bình thường thì Web App có thể chưa để quyền truy cập "Bất kỳ ai".'); er.status = 0; throw er; }
+    if (biChuyenDangNhap(res)) { const er = new Error(MSG_DOI_DANG_NHAP); er.status = 'login'; throw er; }
+    if (!res.ok) { const er = new Error(loiHttp(res.status)); er.status = res.status; throw er; }
+    let j; try { j = await res.json(); } catch { const er = new Error('Máy chủ trả về trang web thay vì dữ liệu — thường do Web App chưa để quyền "Bất kỳ ai" hoặc URL không phải bản /exec.'); er.status = 'html'; throw er; }
     if (!j.ok) { if (j.code === 'AUTH' && action !== 'login') hetPhien(); throw new Error(j.error || 'Lỗi máy chủ'); }
     return j.data;
   },
@@ -1603,7 +1612,7 @@ const Store = {
   async taoMatKhauLocal(pw) { const salt = uid() + uid(); LS.set('lbg_pw', { salt, hash: await sha256(salt + pw) }); },
   async dangXuat() {
     if (this.mayChu && this.token) { try { await this.goi('logout'); } catch { /* bỏ qua */ } }
-    SS.del('lbg_token'); LS.del('lbg_token_nho'); SS.del('lbg_local_ok'); this.token = ''; this.khoaAI = null;
+    SS.del('lbg_token'); LS.del('lbg_token_nho'); SS.del('lbg_local_ok'); this.token = '';
   },
   async doiMatKhau(cu, moi) {
     if (this.mayChu) { await this.goi('changePw', { old: cu, new: moi }); return; }
@@ -1638,32 +1647,8 @@ const Store = {
     const url = this.mayChu ? (await this.goi('getImage', { id: anhId })).dataUrl : LS.get('lbg_img_' + anhId);
     if (url) this.anh.set(anhId, url); return url;
   },
-  /** Khóa Gemini từ máy chủ (chỉ trả cho admin đã đăng nhập), giữ trong bộ nhớ, không lưu xuống trình duyệt */
-  async layKhoaAI() {
-    if (this.khoaAI && this.khoaAI.url === this.url) return this.khoaAI;
-    const r = await this.goi('aiKey');
-    this.khoaAI = { key: (r && r.key) || '', model: (r && r.model) || '', url: this.url };
-    return this.khoaAI;
-  },
   async docAnhAI(dataUrl, baoTienDo) {
-    if (this.mayChu) {
-      // 1) Trình duyệt gọi Gemini trực tiếp (giống bản dùng thử): Gemini hay báo "quá tải" với yêu cầu từ máy chủ Apps Script.
-      // 2) Không được thì nhờ máy chủ đọc. Máy chủ bản cũ (chưa có thao tác aiKey) thì đi thẳng bước 2.
-      let loiTD = null, k = null;
-      try { k = await this.layKhoaAI(); } catch (e) { if (!this.token) throw e; console.warn('Máy chủ chưa hỗ trợ aiKey:', e.message); }
-      if (k && k.key) {
-        try { return { ...(await goiGemini(dataUrl, k.key, k.model, baoTienDo, 90e3)), qua: 'trình duyệt' }; }
-        catch (e) { if (e.maHttp === 400 || e.maHttp === 403) this.khoaAI = null; if (e.maHttp === 400) throw e; loiTD = e; }
-      }
-      if (baoTienDo) baoTienDo(loiTD ? 'trình duyệt chưa đọc được, đang nhờ máy chủ…' : 'đang nhờ máy chủ đọc…');
-      try { return { ...(await this.goi('aiParse', { dataUrl })), qua: 'máy chủ' }; }
-      catch (e) {
-        if (!loiTD) throw e;
-        const bo = m => String(m).replace(/\s*Chờ vài phút.*$/, '');
-        const g = new Error('Trình duyệt: ' + bo(loiTD.message) + ' Máy chủ: ' + bo(e.message) + ' Chờ vài phút rồi bấm "Thử lại", hoặc nhập tay trên lưới.');
-        g.quaTai = !!(loiTD.quaTai || /quá tải|503/.test(e.message)); throw g;
-      }
-    }
+    if (this.mayChu) return this.goi('aiParse', { dataUrl });
     const g = LS.get('lbg_gemini') || {};
     if (!g.key) throw new Error('Chưa có khóa Gemini API. Vào Cài đặt → "Nhận dạng ảnh bằng AI" để nhập khóa, hoặc nhập tay trên lưới.');
     return goiGemini(dataUrl, g.key, g.model, baoTienDo);
@@ -1687,7 +1672,7 @@ async function ghiLog(loai, tom, ct = {}) {
   return e;
 }
 function hetPhien() {
-  SS.del('lbg_token'); LS.del('lbg_token_nho'); Store.token = ''; Store.khoaAI = null;
+  SS.del('lbg_token'); LS.del('lbg_token_nho'); Store.token = '';
   if (!$('#shell').hidden) { toast('Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.', 'err'); hienDangNhap(); }
 }
 
@@ -1735,21 +1720,27 @@ function hienDangNhap(msg = '') {
   const head = `<div class="login-head"><span class="brand-mark">${ic('mark')}</span><h1>Lịch báo giảng</h1><p class="muted">Lập lịch báo giảng theo thời khóa biểu và phân phối chương trình. Chỉ quản trị viên mới truy cập được.</p></div>`;
   if (cheDo === 'gas' || (cheDo === 'local' && coMKLocal)) {
     L.innerHTML = `<form class="login-card" id="f-login">${head}
-      <div class="callout info">${ic(cheDo === 'gas' ? 'server' : 'device')}<div>${cheDo === 'gas' ? 'Máy chủ <b>Google Apps Script</b> — dữ liệu trong Google Sheet của bạn.' : 'Chế độ <b>dùng thử</b> — dữ liệu lưu trên trình duyệt này.'}</div></div>
+      <div class="callout info">${ic(cheDo === 'gas' ? 'server' : 'device')}<div>${cheDo === 'gas' ? `Máy chủ <b>Google Apps Script</b> — dữ liệu trong Google Sheet của bạn.<br><small class="url-nho">${esc(rutGonUrl(diaChiMayChu()) || 'chưa có địa chỉ')}${coDinh && LS.get('lbg_api_rieng') ? ' (đã đổi trên máy này)' : ''}</small>` : 'Chế độ <b>dùng thử</b> — dữ liệu lưu trên trình duyệt này.'}</div></div>
+      ${cheDo === 'gas' && coDinh && dinhDangUrl(diaChiMayChu()) !== 'ok' ? `<div class="callout warn">${ic('alert')}<div>Địa chỉ máy chủ có vẻ chưa đúng dạng <b>…/macros/s/…/exec</b>. Bấm <b>Kiểm tra máy chủ</b> để xem chi tiết.</div></div>` : ''}
       <input type="text" name="username" value="admin" autocomplete="username" hidden>
       <label class="fld"><span>Mật khẩu quản trị</span><input id="lg-pw" type="password" autocomplete="current-password" required></label>
       ${cheDo === 'gas' ? '<label class="chk"><input type="checkbox" id="lg-nho"> Ghi nhớ trên máy này (tối đa 6 giờ)</label>' : ''}
       <div class="err-text" id="lg-err" role="alert">${esc(msg)}</div>
+      <div id="lg-chan"></div>
       <button class="btn primary" type="submit" id="lg-btn">${ic('lock')}Đăng nhập</button>
-      ${coDinh ? '' : `<button class="btn ghost sm" type="button" data-act="doi-che-do">${cheDo === 'gas' ? 'Đổi máy chủ / dùng thử trên máy này' : 'Kết nối máy chủ Apps Script'}</button>`}
+      <div class="row">${cheDo === 'gas' ? `<button class="btn ghost sm" type="button" data-act="kiem-tra-may-chu">${ic('check')}Kiểm tra máy chủ</button><button class="btn ghost sm" type="button" data-act="doi-dia-chi">${ic('server')}Đổi địa chỉ máy chủ</button>` : ''}
+      ${coDinh ? '' : `<button class="btn ghost sm" type="button" data-act="doi-che-do">${cheDo === 'gas' ? 'Dùng thử trên máy này' : 'Kết nối máy chủ Apps Script'}</button>`}</div>
     </form>`;
     $('#f-login').onsubmit = async e => {
       e.preventDefault(); const btn = $('#lg-btn'); btn.disabled = true; $('#lg-err').textContent = '';
       try {
-        Store.cheDo = cheDo; if (cheDo === 'gas') Store.url = API_URL_MAC_DINH || LS.get('lbg_api') || '';
+        Store.cheDo = cheDo; if (cheDo === 'gas') Store.url = diaChiMayChu();
         await Store.dangNhap($('#lg-pw').value, $('#lg-nho') && $('#lg-nho').checked);
         await vaoApp();
-      } catch (err) { $('#lg-err').textContent = err.message; btn.disabled = false; }
+      } catch (err) {
+        $('#lg-err').textContent = err.message; btn.disabled = false;
+        if (cheDo === 'gas' && err.status !== undefined) chayChanDoanDangNhap(); // lỗi kết nối/404/403 → tự kiểm tra máy chủ
+      }
     };
     setTimeout(() => $('#lg-pw') && $('#lg-pw').focus(), 50);
     return;
@@ -1775,13 +1766,17 @@ function hienDangNhap(msg = '') {
     e.preventDefault(); const btn = e.submitter || $('#f-gas button[type=submit]'); btn.disabled = true; $('#gs-err').textContent = '';
     const url = $('#gs-url').value.trim();
     try {
-      if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(url)) throw new Error('URL phải là địa chỉ Web App của Google Apps Script (https://script.google.com/macros/s/…/exec).');
-      if (/\/dev$/.test(url)) throw new Error('Hãy dùng URL kết thúc bằng /exec (bản đã triển khai), không dùng /dev.');
+      const dd = dinhDangUrl(url);
+      if (dd === 'dev') throw new Error('Hãy dùng URL kết thúc bằng /exec (bản đã triển khai), không dùng /dev.');
+      if (dd === 'editor') throw new Error('Đây là địa chỉ trang soạn code. Cần URL ứng dụng web dạng https://script.google.com/macros/s/…/exec (Triển khai › Quản lý triển khai).');
       Store.cheDo = 'gas'; Store.url = url;
       await Store.dangNhap($('#gs-pw').value);
-      LS.set('lbg_api', url); LS.set('lbg_mode', 'gas');
+      luuDiaChiMayChu(url); LS.set('lbg_mode', 'gas');
       await vaoApp();
-    } catch (err) { $('#gs-err').textContent = err.message; btn.disabled = false; }
+    } catch (err) {
+      $('#gs-err').textContent = err.message; btn.disabled = false;
+      if (err.status !== undefined) { const kq = await kiemTraMayChu(url); $('#gs-err').insertAdjacentHTML('afterend', `<div class="gs-chan">${veChanDoan(kq)}</div>`); }
+    }
   };
   const fl = $('#f-local');
   if (!coMKLocal) fl.onsubmit = async e => {
@@ -1794,6 +1789,33 @@ function hienDangNhap(msg = '') {
     if ($('#lc-mau').checked && !LS.get('lbg_db')) LS.set('lbg_db', duLieuMau());
     await vaoApp();
   };
+}
+async function chayChanDoanDangNhap() {
+  const box = $('#lg-chan'); if (!box) return;
+  box.innerHTML = `<div class="ai-status"><span class="spinner"></span><span>Đang kiểm tra máy chủ…</span></div>`;
+  const kq = await kiemTraMayChu(diaChiMayChu());
+  if ($('#lg-chan')) $('#lg-chan').innerHTML = veChanDoan(kq);
+}
+async function doiDiaChiMayChu() {
+  const coRieng = API_URL_MAC_DINH && LS.get('lbg_api_rieng');
+  await moModal({
+    tieuDe: 'Địa chỉ máy chủ', co: 'mid', noiDung: `<label class="fld"><span>URL ứng dụng web (kết thúc bằng /exec)</span><input id="dc-url" type="url" value="${esc(diaChiMayChu())}" placeholder="https://script.google.com/macros/s/…/exec" autofocus></label>
+      <p class="note">Lấy trong Apps Script › <b>Triển khai › Quản lý triển khai</b> › chọn bản <b>Ứng dụng web</b> đang hoạt động › sao chép <b>URL ứng dụng web</b>. ${API_URL_MAC_DINH ? 'Địa chỉ mới chỉ lưu trên trình duyệt này; muốn áp dụng cho mọi máy thì sửa dòng API_URL_MAC_DINH trong index.html trên GitHub.' : ''}</p>
+      <div id="dc-kq"></div>
+      ${coRieng ? `<div><button class="btn sm ghost" type="button" id="dc-goc">Dùng lại địa chỉ ghi trong index.html</button></div>` : ''}`,
+    onMo: (w, close) => { const b = $('#dc-goc', w); if (b) b.onclick = () => { LS.del('lbg_api_rieng'); Store.url = diaChiMayChu(); close(true); toast('Đã dùng lại địa chỉ trong index.html.'); hienDangNhap(); }; },
+    nut: [{ nhan: 'Hủy' }, {
+      nhan: 'Kiểm tra và lưu', loai: 'primary', onClick: async w => {
+        const url = $('#dc-url', w).value.trim();
+        $('#dc-kq', w).innerHTML = `<div class="ai-status"><span class="spinner"></span><span>Đang kiểm tra…</span></div>`;
+        const kq = await kiemTraMayChu(url);
+        $('#dc-kq', w).innerHTML = veChanDoan(kq);
+        if (!kq.dungMayChu) { toast('Chưa lưu: địa chỉ này chưa trả lời đúng. Xem hướng dẫn trong hộp thoại.', 'err'); return false; }
+        luuDiaChiMayChu(url); Store.token = ''; SS.del('lbg_token'); LS.del('lbg_token_nho');
+        toast('Đã lưu địa chỉ máy chủ.', 'ok'); hienDangNhap();
+      }
+    }]
+  });
 }
 async function vaoApp() {
   dangTai(true, 'Đang tải dữ liệu…');
@@ -2209,7 +2231,7 @@ async function moNhapTKB(cheDo = 'anh') {
     if (!st.anh) { toast('Chọn ảnh TKB trước.', 'err'); return; }
     if (st.dangAI) return; st.dangAI = true;
     const s = $('#imp-ai-st', w); const btn = $('#imp-ai', w); btn.disabled = true;
-    s.innerHTML = `<span class="spinner"></span><span id="imp-ai-td">AI đang đọc ảnh… thường mất 10–30 giây; nếu Gemini quá tải sẽ tự thử mô hình dự phòng${Store.mayChu ? ', rồi nhờ máy chủ đọc' : ''} (có thể tới 1–2 phút)</span>`;
+    s.innerHTML = `<span class="spinner"></span><span id="imp-ai-td">AI đang đọc ảnh… thường mất 10–30 giây${Store.mayChu ? '; nếu Gemini quá tải, máy chủ tự thử lại với mô hình dự phòng (có thể tới 1–2 phút)' : ''}</span>`;
     try {
       const r = await Store.docAnhAI(st.anh, t => { const el = $('#imp-ai-td', w); if (el) el.textContent = 'AI đang đọc ảnh… ' + t; });
       const kq = chuanHoaAI(r.ketQua);
@@ -2225,11 +2247,11 @@ async function moNhapTKB(cheDo = 'anh') {
       if (kq.ngayApDung) { $('#imp-ngay', w).value = kq.ngayApDung; napGoc(kq.ngayApDung); }
       if (kq.tieuDe && !$('#imp-ten', w).value) $('#imp-ten', w).value = kq.tieuDe.slice(0, 80);
       ['S', 'C'].forEach(b => veLuoi(w, b));
-      st.nguon = 'AI (' + (r.model || 'Gemini') + (r.qua === 'máy chủ' ? ', qua máy chủ' : '') + ')';
+      st.nguon = 'AI (' + (r.model || 'Gemini') + ')';
       btn.innerHTML = ic('ai') + 'AI đọc lại ảnh';
       const khongCo = ['S', 'C'].filter(b => !st.bat[b]).map(b => TEN_BUOI[b].toLowerCase());
       s.innerHTML = kq.o.length
-        ? `<span class="pill p-ok">${ic('check')}Đã đọc ${kq.o.length} ô</span><span class="note">${r.model ? 'Mô hình ' + esc(r.model) + (r.daThu && r.daThu.length ? ' (dự phòng, sau ' + r.daThu.length + ' lần bị quá tải)' : '') + (r.qua === 'máy chủ' ? ' · đọc qua máy chủ' : '') + ' · ' : ''}${esc(ghi.join(' · '))}${kq.ngayApDung ? ' · ngày áp dụng ' + D.vn(kq.ngayApDung) : ''}${khongCo.length ? ` · ảnh không có buổi ${khongCo.join(', ')} → giữ nguyên TKB hiện tại` : ''}${doan ? ' · <b>không rõ buổi, tạm xếp vào buổi sáng — hãy kiểm tra</b>' : ''}. Soát lại từng ô trước khi lưu.</span>`
+        ? `<span class="pill p-ok">${ic('check')}Đã đọc ${kq.o.length} ô</span><span class="note">${r.model ? 'Mô hình ' + esc(r.model) + (r.daThu && r.daThu.length ? ' (dự phòng, sau ' + r.daThu.length + ' lần bị quá tải)' : '') + ' · ' : ''}${esc(ghi.join(' · '))}${kq.ngayApDung ? ' · ngày áp dụng ' + D.vn(kq.ngayApDung) : ''}${khongCo.length ? ` · ảnh không có buổi ${khongCo.join(', ')} → giữ nguyên TKB hiện tại` : ''}${doan ? ' · <b>không rõ buổi, tạm xếp vào buổi sáng — hãy kiểm tra</b>' : ''}. Soát lại từng ô trước khi lưu.</span>`
         : `<span class="pill p-err">Không đọc được ô nào</span><span class="note">Thử ảnh rõ hơn hoặc nhập tay.</span>`;
     } catch (e) {
       const quaTai = e.quaTai || /quá tải|503|high demand|UNAVAILABLE|429/i.test(e.message);
@@ -2445,57 +2467,22 @@ function bangPPCT(bai) {
   });
   return `<div class="tbl-wrap" style="max-height:52vh;overflow:auto;border:1px solid var(--line);border-radius:var(--r-sm)"><table class="tbl ppct-table"><thead><tr><th class="c">Tiết</th><th class="c">Tuần</th><th class="c">HK</th><th>Tên bài</th><th>Ghi chú</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
-/** So tên môn không phân biệt dấu, chữ "lớp", "khối", "môn": "Tin học lớp 9" ≡ "Tin học 9" */
-const khoaMon = s => boDau(s).replace(/\b(mon|lop|khoi)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
-const gocMon = s => khoaMon(s).replace(/\s*\d+$/, '').trim();
-/** Môn đã có ứng với PPCT vừa đọc: cùng tên, hoặc môn đang phân công cho khối đó có cùng tên gốc (Tin học 8 ↔ Tin học 8) */
-function timMonTrung(ten, khoi) {
-  const k = khoaMon(ten);
-  let m = DB.mon.find(x => khoaMon(x.ten) === k || x.id === slug(ten));
-  if (m) return m.id;
-  const pc = khoi && CFG().phanCong.khoi[khoi], mp = pc && monTheoId(pc);
-  if (mp && gocMon(mp.ten) === gocMon(ten)) return mp.id;
-  m = DB.mon.find(x => khoi && String(x.khoi) === String(khoi) && gocMon(x.ten) === gocMon(ten));
-  return m ? m.id : '';
-}
 function moXemTruocPPCT(kq, tenFile, idThay) {
-  const cb = kiemTraPPCT(kq.bai, kq.tongTieuDe, kq.hkTong);
-  const trung = idThay || timMonTrung(kq.ten, kq.khoi);
+  const cb = kiemTraPPCT(kq.bai, kq.tongTieuDe);
+  const trung = idThay || (DB.mon.find(m => m.id === slug(kq.ten) || boDau(m.ten) === boDau(kq.ten)) || {}).id || '';
   const hk1 = kq.bai.filter(b => b.hocKy === 'I').length, hk2 = kq.bai.filter(b => b.hocKy === 'II').length;
   const soCD = new Set(kq.bai.map(b => b.chuDe).filter(Boolean)).size;
   const html = `<div class="grid-3">
       <label class="fld"><span>Tên môn</span><input id="pp-ten" value="${esc(kq.ten)}"></label>
       <label class="fld"><span>Khối</span><input id="pp-khoi" value="${esc(kq.khoi)}" inputmode="numeric"></label>
-      <label class="fld"><span>Lưu vào</span><select id="pp-dich"><option value="__moi">Môn mới</option>${DB.mon.map(m => `<option value="${esc(m.id)}" ${m.id === trung ? 'selected' : ''}>${esc(m.ten)}${m.bai.length ? ` (thay ${m.bai.length} tiết đang có)` : ' (chưa có PPCT)'}</option>`).join('')}</select></label></div>
-    <label class="chk" id="pp-gan-wrap"><input type="checkbox" id="pp-gan"> <span id="pp-gan-nhan"></span></label>
-    ${kq.tenTuFile ? `<div class="callout info">${ic('info')}<div>File không có dòng tiêu đề “Phân phối chương trình môn …” nên tên môn và khối được lấy từ tên file <b>${esc(tenFile)}</b>. Kiểm tra lại hai ô trên.</div></div>` : ''}
-    <div class="row"><span class="pill p-info">${kq.bai.length} tiết</span><span class="pill p-muted">HK I: ${hk1} · HK II: ${hk2}</span>${soCD ? `<span class="pill p-muted">${soCD} chủ đề</span>` : ''}${kq.tongTieuDe ? `<span class="pill ${kq.tongTieuDe === kq.bai.length ? 'p-ok' : 'p-warn'}">Tiêu đề: ${kq.tongTieuDe} tiết</span>` : ''}${kq.chuanHoa ? `<span class="pill p-muted">Đã chuẩn hóa ${kq.chuanHoa} tên bài (khoảng trắng, chữ in hoa)</span>` : ''}</div>
+      <label class="fld"><span>Lưu vào</span><select id="pp-dich"><option value="__moi">Môn mới</option>${DB.mon.map(m => `<option value="${esc(m.id)}" ${m.id === trung ? 'selected' : ''}>Thay PPCT của: ${esc(m.ten)}</option>`).join('')}</select></label></div>
+    <div class="row"><span class="pill p-info">${kq.bai.length} tiết</span><span class="pill p-muted">HK I: ${hk1} · HK II: ${hk2}</span>${soCD ? `<span class="pill p-muted">${soCD} chủ đề</span>` : ''}${kq.tongTieuDe ? `<span class="pill ${kq.tongTieuDe === kq.bai.length ? 'p-ok' : 'p-warn'}">Tiêu đề: ${kq.tongTieuDe} tiết</span>` : ''}${kq.chuanHoa ? `<span class="pill p-muted">Đã chuẩn hóa khoảng trắng ${kq.chuanHoa} tên bài</span>` : ''}</div>
     ${cb.map(x => `<div class="callout ${x.muc === 'err' ? 'err' : 'warn'}">${ic('alert')}<div>${esc(x.nd)}</div></div>`).join('') || `<div class="callout ok">${ic('check')}<div>Không phát hiện lỗi: số tiết liên tục, tên bài thống nhất.</div></div>`}
     ${bangPPCT(kq.bai)}`;
   moModal({
-    tieuDe: 'Xem trước PPCT từ ' + tenFile, noiDung: html, co: 'mid',
-    onMo: w => {
-      const cbx = $('#pp-gan', w);
-      // Dòng "Dùng PPCT này cho các lớp khối N": tự đánh dấu khi khối chưa có môn, môn của khối chưa có PPCT, hoặc cùng tên môn
-      const veGan = lanDau => {
-        const khoi = $('#pp-khoi', w).value.trim(), dich = $('#pp-dich', w).value;
-        if (!/^\d{1,2}$/.test(khoi)) { $('#pp-gan-wrap', w).hidden = true; cbx.checked = false; return; }
-        $('#pp-gan-wrap', w).hidden = false;
-        const hien = CFG().phanCong.khoi[khoi], mHien = hien && monTheoId(hien), laNo = !!hien && hien === dich;
-        $('#pp-gan-nhan', w).innerHTML = laNo ? `Các lớp khối <b>${esc(khoi)}</b> đang dùng môn này` : `Dùng PPCT này cho các lớp khối <b>${esc(khoi)}</b>` + (mHien ? ` <span class="muted">(thay cho ${esc(mHien.ten)}${mHien.bai.length ? ', ' + mHien.bai.length + ' tiết' : ', chưa có PPCT'})</span>` : '');
-        cbx.disabled = laNo;
-        if (laNo) cbx.checked = true;
-        else if (lanDau || !cbx.dataset.suaTay) cbx.checked = !hien || !mHien || !mHien.bai.length || gocMon(mHien.ten) === gocMon($('#pp-ten', w).value);
-      };
-      cbx.addEventListener('change', () => { cbx.dataset.suaTay = '1'; });
-      ['#pp-ten', '#pp-khoi'].forEach(sel => $(sel, w).addEventListener('input', () => veGan(false)));
-      $('#pp-dich', w).addEventListener('change', () => veGan(false));
-      veGan(true);
-    },
-    nut: [{ nhan: 'Hủy' }, {
+    tieuDe: 'Xem trước PPCT từ ' + tenFile, noiDung: html, co: 'mid', nut: [{ nhan: 'Hủy' }, {
       nhan: 'Lưu PPCT', loai: 'primary', icon: 'save', onClick: async w => {
         const ten = $('#pp-ten', w).value.trim(); const khoi = $('#pp-khoi', w).value.trim(); const dich = $('#pp-dich', w).value;
-        const gan = $('#pp-gan', w).checked && /^\d{1,2}$/.test(khoi);
         if (!ten) { toast('Nhập tên môn.', 'err'); return false; }
         let id = dich;
         if (dich === '__moi') { id = slug(ten); let k = 2; while (monTheoId(id)) id = slug(ten) + '-' + k++; }
@@ -2504,12 +2491,11 @@ function moXemTruocPPCT(kq, tenFile, idThay) {
         await luuMon(mon, cu);
         const thayDoi = cu ? soSanhPPCT(cu.bai, mon.bai) : [];
         await ghiLog('ppct', `${cu ? 'Nhập lại' : 'Nhập'} PPCT ${ten} (${mon.bai.length} tiết) từ ${tenFile}${cu ? ' · ' + thayDoi.length + ' tiết thay đổi' : ''}`, { mon: id, soTiet: mon.bai.length, canhBao: cb.map(x => x.nd), thayDoi: thayDoi.slice(0, 60) });
-        const truocKhoi = CFG().phanCong.khoi[khoi] || '';
-        if (gan && truocKhoi !== id) {
+        if (khoi && !CFG().phanCong.khoi[khoi]) {
           const c = clone(DB.config || {}); c.phanCong = CFG().phanCong; c.phanCong.khoi[khoi] = id; DB.config = c; daThayDoi(); await luu('config', c);
-          await ghiLog('ppct', `Phân công: khối ${khoi} → ${ten}${truocKhoi ? ' (trước đây: ' + tenMon(truocKhoi) + ')' : ''}`, { khoi, mon: id, truoc: truocKhoi });
+          await ghiLog('ppct', `Phân công: khối ${khoi} → ${ten}`, { khoi, mon: id });
         }
-        render(); toast('Đã lưu PPCT ' + ten + (gan ? ' · áp dụng cho khối ' + khoi : ''), 'ok');
+        render(); toast('Đã lưu PPCT ' + ten, 'ok');
       }
     }]
   });
@@ -2658,11 +2644,10 @@ function vCaiDat() {
     <section class="card"><div class="card-h"><h3>Giờ học từng tiết</h3><span class="note">Theo bảng giờ hoạt động của trường</span></div><div class="card-b grid-2"><div><b class="small">Buổi sáng</b>${bell('S')}</div><div><b class="small">Buổi chiều</b>${bell('C')}</div></div></section>
     <section class="card"><div class="card-h"><h3>Tài khoản &amp; máy chủ</h3></div><div class="card-b stack">
       <div class="callout ${Store.mayChu ? 'ok' : 'warn'}">${ic(Store.mayChu ? 'server' : 'device')}<div>${Store.mayChu ? `Đang dùng máy chủ Apps Script.<br><small>${esc(Store.url)}</small>` : 'Đang ở chế độ <b>dùng thử</b>: dữ liệu chỉ lưu trên trình duyệt này. Hãy sao lưu JSON thường xuyên, hoặc triển khai máy chủ theo README.'}</div></div>
-      <div class="row"><button class="btn" data-act="doi-mk">${ic('lock')}Đổi mật khẩu</button>${API_URL_MAC_DINH ? '' : `<button class="btn" data-act="doi-may-chu">${ic('server')}${Store.mayChu ? 'Đổi máy chủ' : 'Chuyển sang máy chủ'}</button>`}<button class="btn" data-act="dang-xuat">${ic('out')}Đăng xuất</button></div>
+      <div class="row"><button class="btn" data-act="doi-mk">${ic('lock')}Đổi mật khẩu</button>${Store.mayChu ? `<button class="btn" data-act="kiem-tra-may-chu">${ic('check')}Kiểm tra máy chủ</button>` : ''}${API_URL_MAC_DINH ? '' : `<button class="btn" data-act="doi-may-chu">${ic('server')}${Store.mayChu ? 'Đổi máy chủ' : 'Chuyển sang máy chủ'}</button>`}<button class="btn" data-act="dang-xuat">${ic('out')}Đăng xuất</button></div>
     </div></section>
     <section class="card"><div class="card-h"><h3>Nhận dạng ảnh bằng AI</h3></div><div class="card-b stack">
-      ${Store.mayChu ? `<p class="small">Khóa Gemini API được cài trên máy chủ (Google Sheet → menu <b>Lịch báo giảng › Cài khóa Gemini API</b>), không nằm trong trang GitHub.</p>
-      <p class="small">Khi đọc ảnh TKB, trình duyệt của bạn (đã đăng nhập) nhận khóa từ máy chủ và gọi Gemini trực tiếp, vì Gemini hay báo quá tải với yêu cầu từ máy chủ Apps Script. Nếu trình duyệt không gọi được, máy chủ tự đọc ảnh thay. Menu <b>Thử kết nối Gemini từ máy chủ</b> trong Google Sheet cho biết máy chủ đang gọi được mô hình nào.</p>`
+      ${Store.mayChu ? `<p class="small">Khóa Gemini API được cài trên máy chủ (Google Sheet → menu <b>Lịch báo giảng › Cài khóa Gemini API</b>) nên không lộ ra trang GitHub.</p>`
         : `<p class="small">Ở chế độ dùng thử, khóa lưu trên trình duyệt này. Lấy khóa miễn phí tại <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>.</p>
       <label class="fld"><span>Khóa Gemini API</span><input id="ai-key" type="password" value="${esc(g.key || '')}" autocomplete="off" placeholder="AIza…"></label>
       <label class="fld"><span>Mô hình <small>(để trống = tự chọn)</small></span><input id="ai-model" value="${esc(g.model || '')}" placeholder="gemini-3.8-flash"></label>
@@ -2971,12 +2956,12 @@ async function doiMayChu() {
     nut: [{ nhan: 'Hủy' }, {
       nhan: 'Kết nối', loai: 'primary', onClick: async w => {
         const url = $('#mc-url', w).value.trim(), pw = $('#mc-pw', w).value;
-        if (!/^https:\/\/script\.google(usercontent)?\.com\/.+\/exec/.test(url)) { toast('URL Web App chưa đúng (phải kết thúc bằng /exec).', 'err'); return false; }
+        if (['dev', 'editor'].includes(dinhDangUrl(url))) { toast('URL chưa đúng: cần URL ứng dụng web kết thúc bằng /exec.', 'err'); return false; }
         const day = tuLocal && $('#mc-day', w) && $('#mc-day', w).checked; const dbCu = clone(DB);
         const cu = { cheDo: Store.cheDo, url: Store.url, token: Store.token };
         try { Store.cheDo = 'gas'; Store.url = url; await Store.dangNhap(pw); }
         catch (e) { Object.assign(Store, cu); throw e; }
-        LS.set('lbg_api', url); LS.set('lbg_mode', 'gas');
+        luuDiaChiMayChu(url); LS.set('lbg_mode', 'gas');
         if (day) { dangTai(true, 'Đang đẩy dữ liệu lên máy chủ…'); try { await Store.khoiPhuc(dbCu); } finally { dangTai(false); } }
         await vaoApp();
         if (day) await ghiLog('he-thong', 'Chuyển dữ liệu dùng thử lên máy chủ', {});
@@ -3022,6 +3007,14 @@ const ACT = {
     await Store.dangXuat(); S.dirty = false; S.draft = null; DB = null; hienDangNhap();
   },
   'doi-che-do': () => { LS.del('lbg_mode'); hienDangNhap(); },
+  'doi-dia-chi': () => doiDiaChiMayChu(),
+  'kiem-tra-may-chu': async () => {
+    if ($('#lg-chan') && !$('#login').hidden) return chayChanDoanDangNhap();
+    const w = moModal({ tieuDe: 'Kiểm tra máy chủ', co: 'mid', noiDung: '<div id="kt-kq"><div class="ai-status"><span class="spinner"></span><span>Đang kiểm tra…</span></div></div>' });
+    const kq = await kiemTraMayChu(Store.url || diaChiMayChu());
+    if ($('#kt-kq')) $('#kt-kq').innerHTML = veChanDoan(kq);
+    return w;
+  },
   'tiep-dung-thu': () => { LS.set('lbg_mode', 'local'); hienDangNhap(); },
   'mo-tuan': el => chuyenTuan(+el.dataset.so),
   'tuan-lui': () => chuyenTuan(S.tuan - 1),
@@ -3114,8 +3107,8 @@ const ACT_TRONG_MODAL = new Set(['mo-tuan', 'xem-anh']);
 async function khoiDong() {
   apDungGiaoDien();
   ganSuKien();
-  if (API_URL_MAC_DINH) { Store.cheDo = 'gas'; Store.url = API_URL_MAC_DINH; }
-  else { const m = LS.get('lbg_mode'); if (m === 'gas') { Store.cheDo = 'gas'; Store.url = LS.get('lbg_api') || ''; } else if (m === 'local') Store.cheDo = 'local'; }
+  if (API_URL_MAC_DINH) { Store.cheDo = 'gas'; Store.url = diaChiMayChu(); }
+  else { const m = LS.get('lbg_mode'); if (m === 'gas') { Store.cheDo = 'gas'; Store.url = diaChiMayChu(); } else if (m === 'local') Store.cheDo = 'local'; }
   if (Store.cheDo === 'gas' && Store.url) {
     const tk = SS.get('lbg_token') || LS.get('lbg_token_nho');
     if (tk && tk.hetHan > Date.now()) { Store.token = tk.token; try { await vaoApp(); return; } catch (e) { console.warn(e); } }
