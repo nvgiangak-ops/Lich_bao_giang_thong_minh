@@ -541,8 +541,8 @@ table.tkb { border-collapse: separate; border-spacing: 0; width: 100%; min-width
 
 // ▶ Dán URL Web App của Apps Script vào đây để cố định máy chủ khi đưa lên GitHub.
 //   Để trống: màn hình đăng nhập sẽ hỏi địa chỉ máy chủ (lưu trên trình duyệt).
-const API_URL_MAC_DINH = 'https://script.google.com/macros/s/AKfycbzvV5IXDi3z79oq9y8z-s8Lz9cvS80TOooMPAfkYDZVv_h8G3JnHBakBuq5vP6-7BD_/exec';
-const PHIEN_BAN = '1.1.2';
+const API_URL_MAC_DINH = 'https://script.google.com/macros/s/AKfycbx4oUcLFcXN6SWoaHAOSHc8XZqfnAT6CQxBpNQB6Us0IqZ6fPCk3j6ejBduq5JKsoEHfg/exec';
+const PHIEN_BAN = '1.3.0';
 
 /* ---------------- tiện ích chung ---------------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -853,9 +853,14 @@ async function docDocx(buf) {
           const pr = conTen(tc, 'tcPr')[0];
           const gs = pr && conTen(pr, 'gridSpan')[0];
           const span = gs ? parseInt(gs.getAttribute('w:val') || gs.getAttributeNS(gs.namespaceURI, 'val') || '1', 10) || 1 : 1;
+          const vm = pr && conTen(pr, 'vMerge')[0];
+          const noi = !!vm && (vm.getAttribute('w:val') || vm.getAttributeNS(vm.namespaceURI, 'val') || 'continue') !== 'restart';
           const text = conTen(tc, 'p').map(vanBanDoan).join('\n').trim();
-          return { text, span };
+          return { text, span, noi: noi && !text };
         }));
+        // ô gộp dọc (cột Tuần, Chủ đề… gộp nhiều dòng): các dòng dưới lấy chữ của ô đầu
+        const tren = [];
+        rows.forEach(r => { let cot = 0; r.forEach(c => { if (c.noi && tren[cot] != null) c.text = tren[cot]; else tren[cot] = c.text; cot += c.span || 1; }); });
         blocks.push({ type: 'tbl', rows });
       } else if (el.localName === 'sdt') { const c = conTen(el, 'sdtContent')[0]; if (c) duyet(c); }
     }
@@ -891,13 +896,20 @@ async function docXlsx(buf) {
         arr[ci] = { text: String(v).trim(), span: 1 };
       }
     }
-    // ô gộp: đặt span cho ô đầu dòng
+    // ô gộp: ô đầu mang span; ô gộp ngang bị che thì bỏ (không lệch cột); ô gộp dọc lấy chữ của ô đầu
+    const phu = new Set();
     for (const mc of hauDuTen(doc.documentElement, 'mergeCell')) {
       const [a, b] = mc.getAttribute('ref').split(':'); if (!b) continue;
-      const r1 = parseInt(a.replace(/[A-Z]+/, ''), 10) - 1, c1 = cotSo(a), c2 = cotSo(b);
-      const row = grid[r1]; if (row && row[c1]) row[c1].span = c2 - c1 + 1;
+      const r1 = parseInt(a.replace(/[A-Z]+/, ''), 10) - 1, r2 = parseInt(b.replace(/[A-Z]+/, ''), 10) - 1, c1 = cotSo(a), c2 = cotSo(b);
+      const dau = grid[r1] && grid[r1][c1]; const txt = dau ? dau.text : '';
+      for (let r = r1; r <= r2; r++) {
+        grid[r] = grid[r] || [];
+        grid[r][c1] = { text: (grid[r][c1] && grid[r][c1].text) || txt, span: c2 - c1 + 1 };
+        for (let c = c1 + 1; c <= c2; c++) phu.add(r + ',' + c);
+      }
     }
-    const rows = grid.filter(Boolean).map(r => { const out = []; for (let i = 0; i < r.length; i++) out[i] = r[i] || { text: '', span: 1 }; return out; });
+    const rows = [];
+    grid.forEach((r, ri) => { if (!r) return; const out = []; for (let i = 0; i < r.length; i++) { if (phu.has(ri + ',' + i)) continue; out.push(r[i] || { text: '', span: 1 }); } rows.push(out); });
     sheets.push({ name: sh.getAttribute('name'), rows });
   }
   return sheets;
@@ -1275,20 +1287,83 @@ function tachSo(s) {
   }
   return out;
 }
-function chuanHoaTen(s) { return String(s || '').replace(/\s+/g, ' ').replace(/([^\s(])\(/g, '$1 (').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim(); }
+function chuanHoaTen(s) {
+  return String(s || '').replace(/\s+/g, ' ').replace(/\s+[-–—]\s+/g, ' – ').replace(/([^\s(])\(/g, '$1 (').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim();
+}
+/** Tên bài viết IN HOA toàn bộ → viết thường, hoa chữ đầu, giữ số La Mã sau "kì/kỳ" (KIỂM TRA GIỮA HỌC KÌ I → Kiểm tra giữa học kì I) */
+function boInHoa(s) {
+  s = String(s || '');
+  if (!/\s/.test(s.trim()) || s !== s.toLocaleUpperCase('vi') || s === s.toLocaleLowerCase('vi')) return s;   // chữ viết tắt một từ (HĐTN) giữ nguyên
+  const t = s.toLocaleLowerCase('vi').replace(/(k[ìỳiy])\s+(ii|i)(?![\p{L}\d])/gu, (m, a, b) => a + ' ' + b.toUpperCase())
+    .replace(/^((?:bài|chủ đề|chương|phần)\s*[\divx]+[a-zđ]?\s*[.:\-–]\s*)(\p{L})/u, (m, a, b) => a + b.toLocaleUpperCase('vi'));   // BÀI 1. THIẾT BỊ → Bài 1. Thiết bị
+  return t.charAt(0).toLocaleUpperCase('vi') + t.slice(1);
+}
+/** Phần tên bài dùng để so các tiết của cùng một bài: bỏ (T1), (TT), (Tiết 2), – Tiết 1, (tiết 1/2), dấu chấm cuối */
+function gocTenBai(s) {
+  let t = String(s || '').trim();
+  for (let i = 0; i < 3; i++) t = t.replace(/\s*[.;,]+\s*$/, '').replace(/\s*[(\[]\s*(tt|tiếp theo|tiếp|t\s*\d+|tiết\s*\d+[^)\]]*)\s*[)\]]\s*$/i, '').replace(/\s*[–—-]\s*tiết\s*\d+(\s*\/\s*\d+)?\s*$/i, '').trim();
+  return t;
+}
+/** Tên chuẩn của các môn thường gặp (khi tên lấy từ tên file không dấu hoặc lỗi mã như "Tin_h_c") */
+const TEN_MON_CHUAN = { 'tin hoc': 'Tin học', 'tin h c': 'Tin học', 'toan': 'Toán', 'ngu van': 'Ngữ văn', 'tieng anh': 'Tiếng Anh', 'khoa hoc tu nhien': 'Khoa học tự nhiên', 'khtn': 'Khoa học tự nhiên',
+  'lich su va dia li': 'Lịch sử và Địa lí', 'lich su va dia ly': 'Lịch sử và Địa lí', 'lich su': 'Lịch sử', 'dia li': 'Địa lí', 'dia ly': 'Địa lí', 'giao duc cong dan': 'Giáo dục công dân', 'gdcd': 'Giáo dục công dân',
+  'cong nghe': 'Công nghệ', 'am nhac': 'Âm nhạc', 'mi thuat': 'Mĩ thuật', 'my thuat': 'Mĩ thuật', 'giao duc the chat': 'Giáo dục thể chất', 'gdtc': 'Giáo dục thể chất', 'tri tue nhan tao': 'Trí tuệ nhân tạo',
+  'hoat dong trai nghiem huong nghiep': 'Hoạt động trải nghiệm, hướng nghiệp', 'hoat dong trai nghiem': 'Hoạt động trải nghiệm', 'hdtn': 'Hoạt động trải nghiệm, hướng nghiệp', 'giao duc dia phuong': 'Giáo dục địa phương', 'noi dung giao duc dia phuong': 'Giáo dục địa phương',
+  'vat li': 'Vật lí', 'vat ly': 'Vật lí', 'hoa hoc': 'Hóa học', 'sinh hoc': 'Sinh học' };
+const KHOA_MON_CHUAN = Object.keys(TEN_MON_CHUAN).sort((x, y) => y.length - x.length);
+const TU_THUA = new Set('giao an ke hoach day hoc mon lop khoi ppct phan phoi chuong trinh nam bai giang kntt ctst cd canh dieu ket noi tri thuc chan troi sang tao ban moi sua final copy cv theo cua gv ki ky tuan hk'.split(' '));
+/** "tin hoc 8" → "Tin học 8"; "Tiếng anh 6" → "Tiếng Anh 6"; tên lạ: chỉ viết hoa chữ đầu */
+function chuanTenMon(t) {
+  const m = String(t || '').replace(/\s+/g, ' ').trim().match(/^(.*?)[\s,\-–]*(\d{1,2})?$/);
+  const goc = (m[1] || '').trim(), so = m[2] || '';
+  const k = boDau(goc).replace(/[^a-z0-9]+/g, ' ').trim();
+  const ten = TEN_MON_CHUAN[k] || (goc ? goc.charAt(0).toLocaleUpperCase('vi') + goc.slice(1) : '');
+  return (ten + (so ? ' ' + so : '')).trim();
+}
+/** So tên môn không phân biệt dấu, chữ "lớp", "khối", "môn": "Tin học lớp 9" ≡ "Tin học 9" */
+const khoaMon = s => boDau(s).replace(/\b(mon|lop|khoi)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+const gocMon = s => khoaMon(s).replace(/\s*\d+$/, '').trim();
+/** Tên môn + khối từ tên file: "PPCT_Tin_hoc_8_V1.docx" → {ten:'Tin học 8', khoi:'8'} (bỏ PPCT, số phiên bản, năm học, "lớp") */
+function tenMonTuFile(tenFile) {
+  let t = String(tenFile || '').replace(/\.[^.]+$/, '').replace(/[_+]+/g, ' ').replace(/(?<!\d)-|-(?!\d)/g, ' ')
+    .replace(/(\p{Ll})(\p{Lu})/gu, '$1 $2').replace(/(\p{Ll})(\d)/gu, (m, a, b) => a === 'v' ? m : a + ' ' + b).replace(/\s+/g, ' ').trim();   // KeHoach_CongNghe9 → Ke Hoach Cong Nghe 9
+  t = t.replace(/^(ppct|phân phối chương trình|phan phoi chuong trinh|kế hoạch dạy học|ke hoach day hoc|khdh)\b[\s\-–:]*/i, '').replace(/\bppct\b/ig, ' ').replace(/\s+/g, ' ').trim();
+  for (let i = 0; i < 4; i++) t = t.replace(/[\s\-–]*(\(\d+\)|v\s?\d+(\.\d+)?|ver\s?\d+|b[ảa]n\s?\d+|final|copy|m[ớo]i|\d{4}\s*[-–]\s*\d{4}|n[ăa]m h[ọo]c.*)$/i, '').trim();
+  t = t.replace(/[\s,\-–]+(?:(?:kh[ốo]i|l[ớo]p)\s*)+(\d{1,2})$/i, ' $1');
+  let ten = chuanTenMon(t);
+  const laTenQuen = s => Object.values(TEN_MON_CHUAN).some(v => boDau(v) === boDau(s));
+  if (!laTenQuen(ten.replace(/\s*\d{1,2}$/, ''))) {
+    // tên có chữ thừa ("Giao an Tin hoc 8 HK1", "Ke hoach Cong nghe 9"…): tìm tên môn quen thuộc trong chuỗi, khối = số đứng riêng cuối cùng.
+    // Chỉ nhận khi phần còn lại toàn chữ "thừa" — "Lich su dia phuong 9" không bị rút thành "Lịch sử 9".
+    const a = ' ' + boDau(t).replace(/[^a-z0-9]+/g, ' ').trim() + ' ';
+    const k = KHOA_MON_CHUAN.find(k => a.includes(' ' + k + ' '));
+    const conLai = k ? a.replace(' ' + k + ' ', ' ').trim().split(' ').filter(w => w && !/^\d+$/.test(w) && !/^(hk|hki|hkii|v|ver)\d*$/.test(w)) : [];
+    if (k && conLai.every(w => TU_THUA.has(w))) { const so = (a.match(/\b(1[0-2]|[1-9])\b/g) || []).pop(); ten = TEN_MON_CHUAN[k] + (so ? ' ' + so : ''); }
+  }
+  const khoi = (ten.match(/(?:^|\s)(\d{1,2})$/) || [])[1] || '';
+  return { ten, khoi: +khoi >= 1 && +khoi <= 12 ? khoi : '' };
+}
+/** Tên môn từ tiêu đề hoặc AI: bỏ "môn", "năm học…", "(bộ sách)"; "TIN HỌC – LỚP 6" → "Tin học 6" */
+function tenMonChuan(t) {
+  t = String(t || '').replace(/n[ăa]m\s+h[ọo]c.*$/i, '').replace(/\s*\([^)]*\)\s*$/, '').replace(/[.:,;\-–]+\s*$/, '').replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  if (t === t.toLocaleUpperCase('vi') && t !== t.toLocaleLowerCase('vi')) t = t.toLocaleLowerCase('vi');
+  t = t.replace(/^m[ôo]n\s+/i, '').replace(/[\s,\-–]+(?:(?:kh[ốo]i|l[ớo]p)\s*)+(\d{1,2})\s*$/i, ' $1').replace(/(^|\s)(?:kh[ốo]i|l[ớo]p)\s+(?=\d)/i, '$1').trim();
+  return chuanTenMon(t);
+}
 function laHocKy(t) {
   const a = boDau(t); const m = a.match(/^(?:hoc ky|hoc ki|hk)\s*(ii|i|2|1)\b/);
   if (!m || /tuan\s*x|=/.test(a)) return null;
   return /ii|2/.test(m[1]) ? 'II' : 'I';
 }
-const RE_TIEU_DE = /ph[âa]n\s+ph[ốo]i\s+ch[ươuo]+ng\s+tr[ìi]nh\s*(?:m[ôo]n\s*)?[:\-–]?\s*(.+)/i;
+const RE_TIEU_DE = /(?:ph[âa]n\s+ph[ốo]i\s+ch[ươuo]+ng\s+tr[ìi]nh|k[ếe]\s+ho[ạa]ch\s+d[ạa]y\s+h[ọo]c)\s*(?:m[ôo]n\s*)?[:\-–]?\s*(.+)/i;
 function timCot(L) {
-  const a = L.map(boDau);
+  const a = L.map(x => boDau(x).replace(/\(\s*\d+\s*\)/g, ' ').replace(/[()\[\].:*]/g, ' ').replace(/\s+/g, ' ').trim());
   const f = fn => a.findIndex(fn);
   const tiet = f(t => /^(tiet|tiet so|tiet thu|tiet ppct|so tiet ppct|thu tu tiet|tiet theo ppct|ppct|stt tiet)$/.test(t) || /^tiet (so|thu|ppct)\b/.test(t));
   const soTiet = f(t => /^so tiet$/.test(t));
   const ten = f(t => /(ten bai|bai hoc|bai day|noi dung|ten chu de|^bai$|chu de\/bai)/.test(t) && !/yeu cau|so tiet/.test(t));
-  const tuan = f(t => /^tuan\b/.test(t));
+  const tuan = f(t => /^(tuan|thoi diem)\b/.test(t));
   const ghiChu = f(t => /ghi chu/.test(t));
   const chuDe = f(t => /^(chu de|chuong|mach noi dung|chuong\/chu de|chu de\/chuong)$/.test(t));
   const hk = f(t => /^(hoc ky|hoc ki|hk)$/.test(t));
@@ -1296,21 +1371,20 @@ function timCot(L) {
   return { tiet, soTiet, ten, tuan, ghiChu, hk, chuDe: chuDe === ten ? -1 : chuDe };
 }
 const moRong = r => { const L = []; (r || []).forEach(c => { L.push((c && c.text || '').replace(/\s+/g, ' ').trim()); for (let k = 1; k < ((c && c.span) || 1); k++) L.push(''); }); return L; };
-function tenMonTuTieuDe(t) {
-  t = String(t || '').replace(/n[ăa]m\s+h[ọo]c.*$/i, '').replace(/[.:]+$/, '').trim();
-  if (!t) return '';
-  const low = t.toLocaleLowerCase('vi');
-  return low.charAt(0).toLocaleUpperCase('vi') + low.slice(1);
-}
+const tenMonTuTieuDe = tenMonChuan;
 /** blocks: [{type:'p',text} | {type:'tbl',rows:[[{text,span}]]}] */
 function phanTichPPCT(blocks, tenFile = '') {
   const hk2 = CFG().hk2TuTuan;
   let tieuDe = '', tongTieuDe = null, cot = null, hocKy = '', chuDe = '', dem = 0, chuanHoa = 0;
-  const bai = [];
+  const bai = [], hkTong = {};
   const xetTieuDe = txt => {
     const t = String(txt || '').replace(/\s+/g, ' ').trim(); if (!t) return;
     const m = t.match(RE_TIEU_DE); if (m && !tieuDe) tieuDe = m[1].trim();
-    const m2 = boDau(t).match(/ca nam.*?=\s*(\d+)\s*tiet/); if (m2 && tongTieuDe == null) tongTieuDe = +m2[1];
+    const a = boDau(t);
+    const m2 = a.match(/ca nam.*?=\s*(\d+)\s*tiet/) || a.match(/thoi luong\s*:?\s*(\d+)\s*tiet/) || a.match(/tong (?:so )?tiet\s*:?\s*(\d+)/) || a.match(/(\d+)\s*tiet\s*\/\s*nam/);
+    if (m2 && tongTieuDe == null) tongTieuDe = +m2[1];
+    const m3 = a.match(/(?:hoc ky|hoc ki|hk)\s*(ii|i|2|1)\b[^=|]*?[=|]\s*(\d+)\s*tiet/);   // "Học kỳ I. … = 18 tiết" hoặc bảng "Học kì I | 18 tiết"
+    if (m3) { const k = /ii|2/.test(m3[1]) ? 'II' : 'I'; if (hkTong[k] == null) hkTong[k] = +m3[2]; }
   };
   for (const b of blocks) {
     if (b.type === 'p') {
@@ -1324,7 +1398,7 @@ function phanTichPPCT(blocks, tenFile = '') {
       const L = moRong(r); const khac = [...new Set(L.filter(Boolean))];
       if (!khac.length) continue;
       const hd = timCot(L); if (hd) { cot = hd; continue; }
-      if (!cot) { khac.forEach(xetTieuDe); continue; }
+      if (!cot) { khac.forEach(xetTieuDe); xetTieuDe(khac.join(' | ')); continue; }
       const tietTxt = cot.tiet >= 0 ? (L[cot.tiet] || '') : '';
       let so = RE_SO.test(boDau(tietTxt)) ? tachSo(tietTxt) : [];
       const ten = (L[cot.ten] || '').trim();
@@ -1345,7 +1419,7 @@ function phanTichPPCT(blocks, tenFile = '') {
       so.forEach((t, k) => {
         let tenK = ten.replace(/\s+/g, ' ');
         if (laDem && so.length > 1) tenK += ` (tiết ${k + 1}/${so.length})`;
-        const ch = chuanHoaTen(tenK); if (ch !== tenK) chuanHoa++;
+        const ch = boInHoa(chuanHoaTen(tenK)); if (ch !== tenK) chuanHoa++;
         bai.push({ tiet: t, tuan: tuanArr.length === so.length ? tuanArr[k] : (tuanArr[0] ?? null), hocKy, chuDe, ten: ch, ghiChu: cot.ghiChu >= 0 ? (L[cot.ghiChu] || '') : '' });
       });
       dem = Math.max(dem, ...so);
@@ -1354,12 +1428,15 @@ function phanTichPPCT(blocks, tenFile = '') {
   bai.sort((a, b) => a.tiet - b.tiet);
   const maxT = bai.length ? bai[bai.length - 1].tiet : 0;
   bai.forEach(x => { if (!x.hocKy) x.hocKy = x.tuan ? (x.tuan >= hk2 ? 'II' : 'I') : (x.tiet <= Math.ceil(maxT * 18 / 35) ? 'I' : 'II'); });
-  let ten = tenMonTuTieuDe(tieuDe);
-  if (!ten) ten = String(tenFile).replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ').replace(/^ppct\s*/i, '').trim();
-  const khoi = (ten.match(/(\d{1,2})\s*$/) || tieuDe.match(/(\d{1,2})\b/) || [])[1] || '';
-  return { ten, khoi, bai, tongTieuDe, chuanHoa, coBang: !!cot };
+  const tuFile = tenMonTuFile(tenFile);
+  let ten = tenMonTuTieuDe(tieuDe), tenTuFile = false;
+  if (!ten) { ten = tuFile.ten; tenTuFile = true; }
+  let khoi = (ten.match(/(?:^|\s)(\d{1,2})$/) || tieuDe.match(/(?:l[ớo]p|kh[ốo]i)\s*(\d{1,2})\b/i) || [])[1] || tuFile.khoi || (tieuDe.match(/\b(\d{1,2})\b/) || [])[1] || '';
+  if (!(+khoi >= 1 && +khoi <= 12)) khoi = '';
+  if (khoi && !/\d$/.test(ten)) ten += ' ' + khoi;
+  return { ten, khoi, bai, tongTieuDe, hkTong, chuanHoa, coBang: !!cot, tenTuFile };
 }
-function kiemTraPPCT(bai, tongTieuDe) {
+function kiemTraPPCT(bai, tongTieuDe, hkTong) {
   const cb = [];
   const dem = new Map(); bai.forEach(b => dem.set(b.tiet, (dem.get(b.tiet) || 0) + 1));
   const trung = [...dem].filter(([, v]) => v > 1).map(([k]) => k);
@@ -1370,17 +1447,85 @@ function kiemTraPPCT(bai, tongTieuDe) {
   if (tongTieuDe && tongTieuDe !== bai.length) cb.push({ muc: 'warn', nd: `Tiêu đề ghi cả năm ${tongTieuDe} tiết nhưng bảng có ${bai.length} tiết` });
   const nhom = new Map();
   bai.forEach(b => {
-    const m = b.ten.match(/^B[àa]i\s*(\d+)\s*[.:\-–]?\s*(.*)$/i); if (!m) return;
-    const goc = m[2].replace(/\s*\((tt|tiếp theo|tiếp|tiết\s*\d+[^)]*)\)\s*$/i, '').trim();
-    if (!nhom.has(m[1])) nhom.set(m[1], []); nhom.get(m[1]).push({ tiet: b.tiet, goc });
+    const m = b.ten.match(/^B[àa]i\s*(\d+[a-zđ]?)\s*[.:\-–]?\s*(.*)$/i); if (!m) return;
+    const goc = gocTenBai(m[2]);
+    const k = m[1].toLowerCase(); if (!nhom.has(k)) nhom.set(k, []); nhom.get(k).push({ tiet: b.tiet, goc });
   });
+  // so tên bỏ dấu, bỏ dấu câu/gạch ngang: "Thông tin – dữ liệu" ≡ "Thông tin - dữ liệu."
+  const soKhop = s => boDau(s).replace(/[^a-z0-9]+/g, ' ').trim();
   for (const [k, arr] of nhom) {
-    if (new Set(arr.map(x => boDau(x.goc))).size > 1) cb.push({ muc: 'warn', nd: `Bài ${k} có tên không thống nhất: ` + arr.map(x => `tiết ${x.tiet} “${x.goc}”`).join(' · ') });
+    if (new Set(arr.map(x => soKhop(x.goc))).size > 1) cb.push({ muc: 'warn', nd: `Bài ${k} có tên không thống nhất: ` + arr.map(x => `tiết ${x.tiet} “${x.goc}”`).join(' · ') });
   }
+  if (hkTong) ['I', 'II'].forEach(k => { const n = bai.filter(b => b.hocKy === k).length; if (hkTong[k] != null && n && n !== hkTong[k]) cb.push({ muc: 'warn', nd: `Học kỳ ${k}: phần đầu file ghi ${hkTong[k]} tiết nhưng bảng có ${n} tiết` }); });
+  bai.forEach(b => {
+    const m = boDau(b.ten).match(/\b(giua|cuoi)\s+(hoc\s+)?k[yi]\s+(ii|i)\b/);
+    if (m && b.hocKy && (m[3] === 'ii' ? 'II' : 'I') !== b.hocKy) cb.push({ muc: 'warn', nd: `Tiết ${b.tiet} thuộc học kỳ ${b.hocKy} nhưng tên bài ghi “${b.ten}” — có thể gõ nhầm học kỳ` });
+  });
   let truoc = 0;
   for (const b of bai) { if (b.tuan && b.tuan < truoc) { cb.push({ muc: 'warn', nd: `Cột tuần không tăng dần ở tiết ${b.tiet} (tuần ${b.tuan} sau tuần ${truoc})` }); break; } if (b.tuan) truoc = b.tuan; }
   const rong = bai.filter(b => !b.ten).map(b => b.tiet); if (rong.length) cb.push({ muc: 'err', nd: `Tiết chưa có tên bài: ${rong.join(', ')}` });
   return cb;
+}
+
+/** Các lý do khiến kết quả bộ đọc nhanh chưa đáng tin (rỗng = tốt) */
+function danhGiaPPCT(kq) {
+  const ly = [];
+  if (!kq || !kq.bai.length) { ly.push('không tìm thấy bảng tiết'); return ly; }
+  if (kiemTraPPCT(kq.bai, kq.tongTieuDe, kq.hkTong).some(x => x.muc === 'err')) ly.push('thiếu/trùng số tiết');
+  if (kq.tongTieuDe && kq.tongTieuDe !== kq.bai.length) ly.push('số tiết khác tiêu đề');
+  if (kq.bai.length < 5) ly.push('quá ít tiết');
+  if (!kq.khoi) ly.push('chưa rõ khối');
+  return ly;
+}
+/** Chuyển nội dung Word/Excel thành văn bản gọn để gửi AI */
+function vanBanChoAI(blocks, tenFile) {
+  const out = ['Tên file: ' + tenFile];
+  for (const b of blocks) {
+    if (b.type === 'p') { const t = String(b.text || '').replace(/\s+/g, ' ').trim(); if (t) out.push(t); continue; }
+    out.push('[BẢNG]');
+    for (const r of b.rows) {
+      const o = r.map(c => String((c && c.text) || '').replace(/\s+/g, ' ').trim() + (c && c.span > 1 ? ` [gộp ${c.span} cột]` : ''));
+      if (o.some(x => x)) out.push('| ' + o.join(' | ') + ' |');
+    }
+    out.push('[HẾT BẢNG]');
+  }
+  return out.join('\n').slice(0, 90000);
+}
+/** Chuẩn hóa JSON AI trả về thành kết quả giống bộ đọc nhanh */
+function ketQuaAIPPCT(j, tenFile) {
+  j = j || {};
+  const ds = Array.isArray(j.bai) ? j.bai : Array.isArray(j.tiet) ? j.tiet : Array.isArray(j) ? j : [];
+  const hk2 = CFG().hk2TuTuan;
+  const bai = ds.map(x => ({
+    tiet: parseInt(x.tiet, 10), tuan: x.tuan === '' || x.tuan == null ? null : (parseInt(x.tuan, 10) || null),
+    hocKy: /ii|2/i.test(String(x.hocKy || '')) ? 'II' : (x.hocKy ? 'I' : ''), chuDe: String(x.chuDe || '').replace(/\s+/g, ' ').trim(),
+    ten: boInHoa(chuanHoaTen(x.ten)), ghiChu: String(x.ghiChu || '').replace(/\s+/g, ' ').trim()
+  })).filter(b => b.tiet > 0 && b.ten).sort((a, b) => a.tiet - b.tiet);
+  const maxT = bai.length ? bai[bai.length - 1].tiet : 0;
+  bai.forEach(x => { if (!x.hocKy) x.hocKy = x.tuan ? (x.tuan >= hk2 ? 'II' : 'I') : (x.tiet <= Math.ceil(maxT * 18 / 35) ? 'I' : 'II'); });
+  const tuFile = tenMonTuFile(tenFile);
+  let ten = tenMonChuan(j.tenMon) || tuFile.ten;
+  const khoi = (String(j.khoi || '').match(/\d{1,2}/) || ten.match(/(\d{1,2})\s*$/) || [])[0] || tuFile.khoi || '';
+  if (khoi && !/\d\s*$/.test(ten)) ten += ' ' + khoi;
+  return { ten, khoi, bai, tongTieuDe: parseInt(j.tongTiet, 10) || null, hkTong: {}, chuanHoa: 0, coBang: true, tenTuFile: !tenMonChuan(j.tenMon) };
+}
+/** Chọn môn để lưu PPCT: cùng tên (bỏ "lớp") → môn đang phân công cho khối đó có cùng tên gốc → môn cùng khối, cùng tên gốc → môn mới */
+function chonMonDich(kq, idThay) {
+  if (idThay) return idThay;
+  const k = khoaMon(kq.ten);
+  let m = DB.mon.find(x => khoaMon(x.ten) === k || x.id === slug(kq.ten));
+  if (m) return m.id;
+  const pc = kq.khoi && CFG().phanCong.khoi[kq.khoi], mp = pc && monTheoId(pc);
+  if (mp && gocMon(mp.ten) === gocMon(kq.ten)) return mp.id;
+  m = DB.mon.find(x => kq.khoi && String(x.khoi) === String(kq.khoi) && gocMon(x.ten) === gocMon(kq.ten));
+  return m ? m.id : '__moi';
+}
+/** Có nên dùng PPCT này cho các lớp khối N? (khối chưa có môn, môn của khối chưa có PPCT, hoặc cùng tên gốc) */
+function nenGanKhoi(ten, khoi, dich) {
+  if (!/^\d{1,2}$/.test(String(khoi || ''))) return { hien: false };
+  const hien = CFG().phanCong.khoi[khoi], mHien = hien && monTheoId(hien);
+  if (hien && hien === dich) return { hien: true, laNo: true, mHien, chon: true };
+  return { hien: true, laNo: false, mHien, chon: !hien || !mHien || !mHien.bai.length || gocMon(mHien.ten) === gocMon(ten) };
 }
 
 /* ---------------- việc cần làm cho trang Tổng quan ---------------- */
@@ -1392,7 +1537,7 @@ function viecCanLam() {
   if (chuaPC.length) out.push({ muc: 'warn', nd: `<b>${chuaPC.length} lớp chưa phân công môn:</b> ${esc(chuaPC.join(', '))}`, act: 'tab', tab: 'ppct', nhan: 'Phân công' });
   const monDung = new Map(); rowsN.forEach(r => { if (!r.mon) return; if (!monDung.has(r.mon)) monDung.set(r.mon, new Set()); monDung.get(r.mon).add(r.lop); });
   monDung.forEach((ls, id) => { const m = monTheoId(id); if (!m || !m.bai.length) out.push({ muc: 'warn', nd: `<b>${esc(tenMon(id))} chưa có PPCT</b> (${ls.size} lớp) — tên bài sẽ để trống.`, act: 'nhap-ppct', nhan: 'Nhập PPCT' }); });
-  DB.mon.forEach(m => { const cb = kiemTraPPCT(m.bai, m.tongTieuDe); if (m.bai.length && cb.length) out.push({ muc: 'warn', nd: `<b>PPCT ${esc(m.ten)}:</b> ${esc(cb[0].nd)}${cb.length > 1 ? ` (+${cb.length - 1} cảnh báo)` : ''}`, act: 'sua-ppct', id: m.id, nhan: 'Xem' }); });
+  DB.mon.forEach(m => { const cb = kiemTraPPCT(m.bai, m.tongTieuDe, m.hkTong); if (m.bai.length && cb.length) out.push({ muc: 'warn', nd: `<b>PPCT ${esc(m.ten)}:</b> ${esc(cb[0].nd)}${cb.length > 1 ? ` (+${cb.length - 1} cảnh báo)` : ''}`, act: 'sua-ppct', id: m.id, nhan: 'Xem' }); });
   Object.keys(DB.tuan).map(Number).sort((a, b) => a - b).forEach(so => { if (baoGiangTuan(so).trangThai === 'lech') out.push({ muc: 'err', nd: `<b>Tuần ${so} đã lưu nhưng TKB đã thay đổi</b> — cần cập nhật lịch báo giảng.`, act: 'mo-tuan', so, nhan: 'Mở tuần ' + so }); });
   if (DB.tkb.length && !DB.tuan[n]) out.push({ muc: 'info', nd: `Lịch báo giảng <b>tuần ${n}</b> đang là bản nháp tự sinh, chưa lưu.`, act: 'mo-tuan', so: n, nhan: 'Mở tuần ' + n });
   return out;
@@ -1452,14 +1597,28 @@ Quy ước thường gặp:
 
 Chỉ trả về JSON đúng mẫu, không giải thích:
 {"tieuDe":"", "giaoVien":"", "ngayApDung":"YYYY-MM-DD", "o":[{"buoi":"S","thu":2,"tiet":1,"lop":"9A9","phong":"9A30","mon":""}]}`;
-// Thứ tự thử: mô hình mới → cũ hơn → bản Lite (ít bị quá tải hơn). Lỗi 429/5xx: chờ rồi thử lại, sau đó chuyển mô hình.
-const MODEL_DU_PHONG = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-latest', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
+const PROMPT_PPCT = `Bạn là trợ lý đọc PHÂN PHỐI CHƯƠNG TRÌNH (PPCT) một môn học ở trường phổ thông Việt Nam.
+Mỗi giáo viên trình bày hơi khác nhau: có thể có cột Tuần, Tiết (Tiết số, Tiết PPCT, Thứ tự tiết), Chủ đề/Chương, Tên bài/Bài học/Nội dung, Số tiết, Ghi chú;
+dòng gộp có thể là Học kỳ hoặc Chủ đề; một bài nhiều tiết có thể ghi "(T1)", "(T2)", "(TT)", "– Tiết 1", hoặc gộp "Tiết 5, 6", "5-6".
+Nhiệm vụ: liệt kê ĐẦY ĐỦ từng tiết theo thứ tự, mỗi tiết là một phần tử.
+- tiet: số thứ tự tiết trong năm học (1, 2, 3…). Một dòng ghi nhiều tiết (vd "5-6" hoặc Số tiết = 2) thì tách thành từng tiết, tên bài giữ nguyên và thêm " (tiết 1/2)", " (tiết 2/2)".
+- tuan: tuần dự kiến nếu có, không có thì null.
+- hocKy: "I" hoặc "II" theo dòng Học kỳ; không có thì tuần 19 trở đi là "II".
+- chuDe: chủ đề/chương đang áp dụng cho tiết đó (lặp lại cho mọi tiết cùng chủ đề).
+- ten: tên bài dạy đúng như văn bản (giữ nguyên dấu tiếng Việt, không thêm bớt, không tự sửa).
+- ghiChu: ghi chú nếu có (vd KTTX, Phòng máy).
+- tenMon: tên môn kèm khối, vd "Tin học 8" (lấy từ tiêu đề; không có thì từ tên file).
+- khoi: khối lớp (6–12). tongTiet: tổng số tiết cả năm nếu văn bản có ghi.
+Không bịa nội dung không có trong văn bản. Chỉ trả về JSON đúng mẫu, không giải thích:
+{"tenMon":"","khoi":"","tongTiet":35,"bai":[{"tiet":1,"tuan":1,"hocKy":"I","chuDe":"","ten":"","ghiChu":""}]}`;
+// Thứ tự thử: mô hình chính → bản Lite (nhanh, ít bị quá tải) → các mô hình khác. Lỗi 429/5xx: chờ rồi thử lại, sau đó chuyển mô hình.
+const MODEL_DU_PHONG = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
 const LOI_TAM_THOI = new Set([408, 429, 500, 502, 503, 504]);
 /** Thông điệp lỗi Gemini dễ hiểu */
 function loiGeminiDeHieu(code, msg) {
   if (code === 400 && /api key/i.test(msg)) return 'Khóa Gemini API không hợp lệ. Kiểm tra lại khóa (Cài đặt › Nhận dạng ảnh bằng AI, hoặc menu trong Google Sheet).';
   if (code === 403) return 'Khóa Gemini API không có quyền dùng mô hình này hoặc đã bị chặn. Tạo khóa mới tại aistudio.google.com/apikey.';
-  if (code === 400) return 'Gemini không nhận ảnh này (' + (msg || code) + '). Thử ảnh khác hoặc nhập tay.';
+  if (code === 400) return 'Gemini không nhận dữ liệu này (' + (msg || code) + '). Thử ảnh/tệp khác hoặc nhập tay.';
   return 'Gemini báo lỗi ' + code + (msg ? ': ' + msg : '');
 }
 
@@ -1482,20 +1641,18 @@ function chuanHoaAI(kq) {
   }
   return { ngayApDung: D.hopLe(kq.ngayApDung) ? kq.ngayApDung : '', tieuDe: kq.tieuDe || '', giaoVien: kq.giaoVien || '', o };
 }
-/** Gọi Gemini trực tiếp từ trình duyệt (chỉ dùng ở chế độ dùng thử, khóa lưu trên máy này) */
-async function goiGemini(dataUrl, key, model, baoTienDo) {
-  const m = String(dataUrl).match(/^data:(image\/[\w+.-]+);base64,(.+)$/);
-  if (!m) throw new Error('Ảnh không hợp lệ');
+/** Gọi Gemini trực tiếp từ trình duyệt. Dùng thử: khóa lưu trên máy này. Máy chủ: khóa do máy chủ gửi cho admin đã đăng nhập. */
+async function goiGeminiParts(parts, key, model, baoTienDo, gioiHan = 120e3) {
   const daThu = [], batDau = Date.now();
-  const body = JSON.stringify({ contents: [{ role: 'user', parts: [{ inline_data: { mime_type: m[1], data: m[2] } }, { text: PROMPT_TKB }] }], generationConfig: { responseMimeType: 'application/json' } });
+  const body = JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { responseMimeType: 'application/json' } });
   for (const md of [...new Set([model, ...MODEL_DU_PHONG].filter(Boolean))]) {
     for (let lan = 1; lan <= 2; lan++) {
-      if (Date.now() - batDau > 120e3) break;
+      if (Date.now() - batDau > gioiHan) break;
       if (baoTienDo) baoTienDo(`Đang thử ${md}${lan > 1 ? ' (lần ' + lan + ')' : ''}…`);
       let res;
       try {
         res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(md)}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body });
-      } catch (e) { throw new Error('Không kết nối được Gemini (kiểm tra mạng).'); }
+      } catch (e) { const x = new Error('Trình duyệt không kết nối được Gemini (kiểm tra mạng).'); x.mang = true; throw x; }
       const j = await res.json().catch(() => ({}));
       const msg = (j.error && j.error.message) || '';
       if (res.ok) {
@@ -1505,13 +1662,22 @@ async function goiGemini(dataUrl, key, model, baoTienDo) {
       }
       if (res.status === 404 || /not found|not supported/i.test(msg)) { daThu.push(md + ': không có'); break; }
       if (LOI_TAM_THOI.has(res.status)) { daThu.push(md + ': ' + res.status); if (lan === 1) { await new Promise(r => setTimeout(r, 2500)); continue; } break; }
-      throw new Error(loiGeminiDeHieu(res.status, msg));
+      const x = new Error(loiGeminiDeHieu(res.status, msg)); x.maHttp = res.status; throw x;
     }
   }
   const moHinh = [...new Set(daThu.map(x => x.split(':')[0]))];
   const e = new Error('Gemini đang quá tải: đã thử ' + moHinh.length + ' mô hình (' + moHinh.join(', ') + '), mỗi mô hình tối đa 2 lần. Chờ vài phút rồi bấm "Thử lại", hoặc nhập tay trên lưới.');
   e.quaTai = true; throw e;
 }
+/** Tách data URL (ảnh hoặc PDF) thành phần gửi Gemini */
+function phanDuLieu(dataUrl) {
+  const m = String(dataUrl).match(/^data:((?:image\/[\w+.-]+)|application\/pdf);base64,(.+)$/);
+  if (!m) throw new Error('File không hợp lệ (chỉ nhận ảnh hoặc PDF).');
+  return { inline_data: { mime_type: m[1], data: m[2] } };
+}
+const goiGemini = (dataUrl, key, model, baoTienDo, gioiHan) => goiGeminiParts([phanDuLieu(dataUrl), { text: PROMPT_TKB }], key, model, baoTienDo, gioiHan);
+/** Phần gửi Gemini để đọc PPCT: {text} (nội dung Word/Excel) hoặc {dataUrl} (PDF/ảnh) */
+const phanPPCT = dl => dl.text ? [{ text: PROMPT_PPCT + '\n\nVĂN BẢN PPCT:\n' + dl.text }] : [phanDuLieu(dl.dataUrl), { text: PROMPT_PPCT + '\nTên file: ' + (dl.tenFile || '') }];
 
 /* ---------------- địa chỉ máy chủ & chẩn đoán ---------------- */
 /** Địa chỉ máy chủ đang dùng: địa chỉ đổi trên máy này (nếu có) được ưu tiên hơn địa chỉ ghi trong index.html */
@@ -1575,7 +1741,7 @@ async function kiemTraMayChu(url) {
 const veChanDoan = kq => `<div class="stack-sm">${kq.map(x => `<div class="callout ${x.muc === 'ok' ? 'ok' : x.muc === 'warn' ? 'warn' : 'err'}">${ic(x.muc === 'ok' ? 'check' : x.muc === 'warn' ? 'info' : 'alert')}<div>${x.nd}</div></div>`).join('')}</div>`;
 
 const Store = {
-  cheDo: null, url: '', token: '', anh: new Map(),
+  cheDo: null, url: '', token: '', anh: new Map(), khoaAI: null,
   get mayChu() { return this.cheDo === 'gas'; },
 
   async goi(action, payload = {}) {
@@ -1612,7 +1778,7 @@ const Store = {
   async taoMatKhauLocal(pw) { const salt = uid() + uid(); LS.set('lbg_pw', { salt, hash: await sha256(salt + pw) }); },
   async dangXuat() {
     if (this.mayChu && this.token) { try { await this.goi('logout'); } catch { /* bỏ qua */ } }
-    SS.del('lbg_token'); LS.del('lbg_token_nho'); SS.del('lbg_local_ok'); this.token = '';
+    SS.del('lbg_token'); LS.del('lbg_token_nho'); SS.del('lbg_local_ok'); this.token = ''; this.khoaAI = null;
   },
   async doiMatKhau(cu, moi) {
     if (this.mayChu) { await this.goi('changePw', { old: cu, new: moi }); return; }
@@ -1647,8 +1813,40 @@ const Store = {
     const url = this.mayChu ? (await this.goi('getImage', { id: anhId })).dataUrl : LS.get('lbg_img_' + anhId);
     if (url) this.anh.set(anhId, url); return url;
   },
+  /** Khóa Gemini từ máy chủ (chỉ trả cho admin đã đăng nhập), giữ trong bộ nhớ, không lưu xuống trình duyệt */
+  async layKhoaAI() {
+    if (this.khoaAI && this.khoaAI.url === this.url) return this.khoaAI;
+    const r = await this.goi('aiKey');
+    this.khoaAI = { key: (r && r.key) || '', model: (r && r.model) || '', url: this.url };
+    return this.khoaAI;
+  },
+  /** Chế độ máy chủ: 1) trình duyệt gọi Gemini trực tiếp bằng khóa của máy chủ (Gemini hay báo "quá tải" với yêu cầu từ Apps Script);
+   *  2) không được thì nhờ máy chủ đọc. Máy chủ bản cũ (chưa có thao tác aiKey) thì đi thẳng bước 2. */
+  async aiQuaMayChu(parts, thaoTac, duLieu, baoTienDo) {
+    let loiTD = null, k = null;
+    try { k = await this.layKhoaAI(); } catch (e) { if (!this.token) throw e; console.warn('Máy chủ chưa hỗ trợ aiKey:', e.message); }
+    if (k && k.key) {
+      try { return { ...(await goiGeminiParts(parts, k.key, k.model, baoTienDo, 90e3)), qua: 'trình duyệt' }; }
+      catch (e) { if (e.maHttp === 400 || e.maHttp === 403) this.khoaAI = null; if (e.maHttp === 400) throw e; loiTD = e; }
+    }
+    if (baoTienDo) baoTienDo(loiTD ? 'Trình duyệt chưa đọc được, đang nhờ máy chủ…' : 'Đang nhờ máy chủ đọc…');
+    try { return { ...(await this.goi(thaoTac, duLieu)), qua: 'máy chủ' }; }
+    catch (e) {
+      if (!loiTD || !/quá tải|503|tạm thời|kết nối/i.test(e.message)) throw e;   // lỗi rõ ràng từ máy chủ (khóa sai, chưa cài khóa…) → báo đúng lỗi đó
+      const bo = m => String(m).replace(/\s*Chờ vài phút.*$/, '').replace(/^Trình duyệt\s+/, '');
+      const g = new Error('Trình duyệt: ' + bo(loiTD.message) + ' Máy chủ: ' + bo(e.message) + ' Chờ vài phút rồi thử lại' + (thaoTac === 'aiParse' ? ', hoặc nhập tay trên lưới.' : '.'));
+      g.quaTai = !!(loiTD.quaTai || /quá tải|503/.test(e.message)); throw g;
+    }
+  },
+  /** AI đọc PPCT: {text} (nội dung Word/Excel) hoặc {dataUrl} (PDF/ảnh) */
+  async docPPCTAI(dl, baoTienDo) {
+    if (this.mayChu) return this.aiQuaMayChu(phanPPCT(dl), 'aiPPCT', { text: dl.text || '', dataUrl: dl.dataUrl || '', tenFile: dl.tenFile || '' }, baoTienDo);
+    const g = LS.get('lbg_gemini') || {};
+    if (!g.key) throw new Error('Chưa có khóa Gemini API (Cài đặt › Nhận dạng ảnh bằng AI).');
+    return goiGeminiParts(phanPPCT(dl), g.key, g.model, baoTienDo);
+  },
   async docAnhAI(dataUrl, baoTienDo) {
-    if (this.mayChu) return this.goi('aiParse', { dataUrl });
+    if (this.mayChu) return this.aiQuaMayChu([phanDuLieu(dataUrl), { text: PROMPT_TKB }], 'aiParse', { dataUrl }, baoTienDo);
     const g = LS.get('lbg_gemini') || {};
     if (!g.key) throw new Error('Chưa có khóa Gemini API. Vào Cài đặt → "Nhận dạng ảnh bằng AI" để nhập khóa, hoặc nhập tay trên lưới.');
     return goiGemini(dataUrl, g.key, g.model, baoTienDo);
@@ -1672,7 +1870,7 @@ async function ghiLog(loai, tom, ct = {}) {
   return e;
 }
 function hetPhien() {
-  SS.del('lbg_token'); LS.del('lbg_token_nho'); Store.token = '';
+  SS.del('lbg_token'); LS.del('lbg_token_nho'); Store.token = ''; Store.khoaAI = null;
   if (!$('#shell').hidden) { toast('Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.', 'err'); hienDangNhap(); }
 }
 
@@ -2231,7 +2429,7 @@ async function moNhapTKB(cheDo = 'anh') {
     if (!st.anh) { toast('Chọn ảnh TKB trước.', 'err'); return; }
     if (st.dangAI) return; st.dangAI = true;
     const s = $('#imp-ai-st', w); const btn = $('#imp-ai', w); btn.disabled = true;
-    s.innerHTML = `<span class="spinner"></span><span id="imp-ai-td">AI đang đọc ảnh… thường mất 10–30 giây${Store.mayChu ? '; nếu Gemini quá tải, máy chủ tự thử lại với mô hình dự phòng (có thể tới 1–2 phút)' : ''}</span>`;
+    s.innerHTML = `<span class="spinner"></span><span id="imp-ai-td">AI đang đọc ảnh… thường mất 10–30 giây; nếu Gemini quá tải sẽ tự thử mô hình dự phòng${Store.mayChu ? ', rồi nhờ máy chủ đọc' : ''} (có thể tới 1–2 phút)</span>`;
     try {
       const r = await Store.docAnhAI(st.anh, t => { const el = $('#imp-ai-td', w); if (el) el.textContent = 'AI đang đọc ảnh… ' + t; });
       const kq = chuanHoaAI(r.ketQua);
@@ -2247,11 +2445,11 @@ async function moNhapTKB(cheDo = 'anh') {
       if (kq.ngayApDung) { $('#imp-ngay', w).value = kq.ngayApDung; napGoc(kq.ngayApDung); }
       if (kq.tieuDe && !$('#imp-ten', w).value) $('#imp-ten', w).value = kq.tieuDe.slice(0, 80);
       ['S', 'C'].forEach(b => veLuoi(w, b));
-      st.nguon = 'AI (' + (r.model || 'Gemini') + ')';
+      st.nguon = 'AI (' + (r.model || 'Gemini') + (r.qua === 'máy chủ' ? ', qua máy chủ' : '') + ')';
       btn.innerHTML = ic('ai') + 'AI đọc lại ảnh';
       const khongCo = ['S', 'C'].filter(b => !st.bat[b]).map(b => TEN_BUOI[b].toLowerCase());
       s.innerHTML = kq.o.length
-        ? `<span class="pill p-ok">${ic('check')}Đã đọc ${kq.o.length} ô</span><span class="note">${r.model ? 'Mô hình ' + esc(r.model) + (r.daThu && r.daThu.length ? ' (dự phòng, sau ' + r.daThu.length + ' lần bị quá tải)' : '') + ' · ' : ''}${esc(ghi.join(' · '))}${kq.ngayApDung ? ' · ngày áp dụng ' + D.vn(kq.ngayApDung) : ''}${khongCo.length ? ` · ảnh không có buổi ${khongCo.join(', ')} → giữ nguyên TKB hiện tại` : ''}${doan ? ' · <b>không rõ buổi, tạm xếp vào buổi sáng — hãy kiểm tra</b>' : ''}. Soát lại từng ô trước khi lưu.</span>`
+        ? `<span class="pill p-ok">${ic('check')}Đã đọc ${kq.o.length} ô</span><span class="note">${r.model ? 'Mô hình ' + esc(r.model) + (r.daThu && r.daThu.length ? ((qt => qt ? ' (dự phòng, sau ' + qt + ' lần bị quá tải)' : ' (dự phòng)')(r.daThu.filter(x => !/không có/.test(x)).length)) : '') + (r.qua === 'máy chủ' ? ' · đọc qua máy chủ' : '') + ' · ' : ''}${esc(ghi.join(' · '))}${kq.ngayApDung ? ' · ngày áp dụng ' + D.vn(kq.ngayApDung) : ''}${khongCo.length ? ` · ảnh không có buổi ${khongCo.join(', ')} → giữ nguyên TKB hiện tại` : ''}${doan ? ' · <b>không rõ buổi, tạm xếp vào buổi sáng — hãy kiểm tra</b>' : ''}. Soát lại từng ô trước khi lưu.</span>`
         : `<span class="pill p-err">Không đọc được ô nào</span><span class="note">Thử ảnh rõ hơn hoặc nhập tay.</span>`;
     } catch (e) {
       const quaTai = e.quaTai || /quá tải|503|high demand|UNAVAILABLE|429/i.test(e.message);
@@ -2413,7 +2611,7 @@ function vPPCT() {
   const lopTheoMon = id => [...new Set(rowsN.filter(r => r.mon === id).map(r => r.lop))].sort(soSanhLop);
   const soTietMax = {}; { const dem = {}; rowsN.forEach(r => { dem[r.lop] = (dem[r.lop] || 0) + 1; }); Object.entries(dem).forEach(([l, n]) => { const k = khoiCua(l); soTietMax[k] = Math.max(soTietMax[k] || 0, n); }); }
   const cards = DB.mon.length ? DB.mon.map(m => {
-    const cb = kiemTraPPCT(m.bai, m.tongTieuDe); const ls = lopTheoMon(m.id);
+    const cb = kiemTraPPCT(m.bai, m.tongTieuDe, m.hkTong); const ls = lopTheoMon(m.id);
     const hk1 = m.bai.filter(b => b.hocKy === 'I').length, hk2 = m.bai.filter(b => b.hocKy === 'II').length;
     return `<div class="card subj"><div class="subj-top"><h3>${esc(m.ten)}</h3>${m.khoi ? `<span class="chip ${lopKhoi(m.khoi)}">Khối ${esc(m.khoi)}</span>` : ''}</div>
       <div class="subj-meta">${m.bai.length ? `<span class="pill p-info">${m.bai.length} tiết</span><span class="pill p-muted">HK I: ${hk1} · HK II: ${hk2}</span>` : '<span class="pill p-warn">Chưa có PPCT</span>'}${cb.length ? `<span class="pill p-warn">${cb.length} cảnh báo</span>` : m.bai.length ? '<span class="pill p-ok">Hợp lệ</span>' : ''}</div>
@@ -2436,28 +2634,142 @@ function vPPCT() {
       ${lops.map(l => `<tr><td><span class="chip ${lopKhoi(l)}">${esc(l)}</span></td><td>${esc(tenMon(c.phanCong.khoi[khoiCua(l)]))}</td><td><select data-pc-lop="${esc(l)}">${optM(c.phanCong.lop[l], '(theo khối)')}</select></td></tr>`).join('')}
     </tbody></table></div></details>` : ''}</div></section>`;
   return `<div class="page-h"><div><span class="eyebrow">${DB.mon.length} môn · ${DB.mon.reduce((a, m) => a + m.bai.length, 0)} tiết</span><h2>Phân phối chương trình</h2></div>
-    <div class="row"><button class="btn" data-act="mau-ppct">${ic('down')}Tải file Excel mẫu</button><button class="btn" data-act="them-mon">${ic('plus')}Thêm môn</button><button class="btn primary" data-act="nhap-ppct">${ic('up')}Nhập từ Word / Excel</button></div></div>
+    <div class="row"><button class="btn" data-act="mau-ppct">${ic('down')}Tải file Excel mẫu</button><button class="btn" data-act="them-mon">${ic('plus')}Thêm môn</button><button class="btn primary" data-act="nhap-ppct">${ic('up')}Nhập PPCT (Word, Excel, PDF, ảnh)</button></div></div>
   <div class="stack"><div class="subj-grid">${cards}</div>${pc}
-  <p class="note">Hỗ trợ file .docx (bảng có cột "Tuần", "Tiết", "Bài học/Tên bài", "Ghi chú"; dòng gộp là Học kỳ/Chủ đề) và .xlsx/.csv theo file mẫu. File .doc/.xls đời cũ: mở bằng Word/Excel rồi "Lưu thành" .docx/.xlsx.</p></div>`;
+  <p class="note">Chọn được nhiều file cùng lúc (vd PPCT Tin 6, 7, 8, 9). Word/Excel đọc ngay bằng bộ đọc nhanh; mẫu lạ tự chuyển sang AI Gemini; PDF và ảnh chụp đọc bằng AI. File .doc/.xls đời cũ: "Lưu thành" .docx/.xlsx hoặc PDF.</p></div>`;
 }
+/* ---- nhập PPCT: nhiều file, bộ đọc nhanh + AI khi cần ---- */
+const coAIHienTai = () => !XEM_THU && (Store.mayChu || !!(LS.get('lbg_gemini') || {}).key);
 async function nhapPPCT(idThay = '') {
-  const f = await chonFile('.docx,.xlsx,.csv'); if (!f) return;
-  dangTai(true, 'Đang đọc ' + f.name + '…');
-  let kq;
-  try {
-    const ext = f.name.split('.').pop().toLowerCase(); let blocks;
-    if (ext === 'docx') blocks = await docDocx(await docFile(f));
-    else if (ext === 'xlsx') blocks = (await docXlsx(await docFile(f))).map(s => ({ type: 'tbl', rows: s.rows }));
-    else if (ext === 'csv') blocks = [{ type: 'tbl', rows: docCsv(await docFile(f, 'text')) }];
-    else throw new Error('Chỉ hỗ trợ file .docx, .xlsx hoặc .csv.');
-    kq = phanTichPPCT(blocks, f.name);
-  } catch (e) { dangTai(false); toast(e.message, 'err'); return; }
-  dangTai(false);
-  if (!kq.bai.length) {
-    await moModal({ tieuDe: 'Không tìm thấy bảng PPCT', noiDung: `<p>File <b>${esc(f.name)}</b> ${kq.coBang ? 'có tiêu đề bảng nhưng không có dòng tiết hợp lệ' : 'không có bảng nào có cột “Tiết” và cột “Bài học / Tên bài”'}.</p><p class="note">Hãy dùng file Excel mẫu hoặc kiểm tra lại tiêu đề cột trong file Word.</p>`, nut: [{ nhan: 'Đóng' }, { nhan: 'Tải file mẫu', loai: 'primary', onClick: () => { mauPPCT(); } }] });
-    return;
+  const chon = await chonFile('.docx,.xlsx,.csv,.pdf,image/*,.doc,.xls', !idThay);
+  const ds = (Array.isArray(chon) ? chon : [chon]).filter(Boolean);
+  if (ds.length) moNhapPPCT(ds, idThay);
+}
+/** Đọc 1 file PPCT. epAI = bỏ qua bộ đọc nhanh, dùng AI ngay */
+async function docMotFilePPCT(it, epAI, baoTienDo) {
+  const f = it.f, ext = f.name.split('.').pop().toLowerCase();
+  if (ext === 'doc' || ext === 'xls') throw new Error('File .doc/.xls đời cũ: mở bằng Word/Excel rồi "Lưu thành" .docx/.xlsx, hoặc lưu thành PDF để AI đọc.');
+  if (['docx', 'xlsx', 'csv'].includes(ext)) {
+    if (!it.blocks) {
+      if (ext === 'docx') it.blocks = await docDocx(await docFile(f));
+      else if (ext === 'xlsx') it.blocks = (await docXlsx(await docFile(f))).map(sh => ({ type: 'tbl', rows: sh.rows }));
+      else it.blocks = [{ type: 'tbl', rows: docCsv(await docFile(f, 'text')) }];
+    }
+    let kq = null;
+    if (!epAI) {
+      kq = phanTichPPCT(it.blocks, f.name); it.cach = 'Bộ đọc nhanh'; it.lyDo = danhGiaPPCT(kq);
+      if (!it.lyDo.length) return kq;
+      if (!coAIHienTai()) { it.ghiChuAI = 'Bộ đọc nhanh chưa chắc (' + it.lyDo.join(', ') + '). Cấu hình AI để đọc lại tự động.'; return kq; }
+      baoTienDo('Bộ đọc nhanh chưa chắc (' + it.lyDo.join(', ') + ') → nhờ AI đọc lại…');
+    }
+    let r;
+    try { r = await Store.docPPCTAI({ text: vanBanChoAI(it.blocks, f.name), tenFile: f.name }, baoTienDo); }
+    catch (e) { if (kq) { it.ghiChuAI = 'AI chưa đọc được (' + e.message + '). Đang dùng kết quả bộ đọc nhanh.'; return kq; } throw e; }
+    const kqAI = ketQuaAIPPCT(r.ketQua, f.name);
+    if (kq && kq.bai.length && (!kqAI.bai.length || danhGiaPPCT(kqAI).length > danhGiaPPCT(kq).length)) { it.ghiChuAI = 'AI đọc không tốt hơn nên giữ kết quả bộ đọc nhanh.'; return kq; }
+    it.cach = 'AI · ' + (r.model || 'Gemini') + (r.qua === 'máy chủ' ? ' · qua máy chủ' : ''); it.ghiChuAI = ''; it.lyDo = danhGiaPPCT(kqAI);
+    return kqAI;
   }
-  moXemTruocPPCT(kq, f.name, idThay);
+  if (ext === 'pdf' || /^image\//.test(f.type)) {
+    if (!coAIHienTai()) throw new Error('File PDF/ảnh cần AI để đọc. Cấu hình Gemini (Cài đặt › Nhận dạng ảnh bằng AI, hoặc khóa trên máy chủ), hoặc lưu PPCT thành .docx/.xlsx.');
+    if (!it.dataUrl) it.dataUrl = ext === 'pdf' ? await docFile(f, 'url') : await nenAnh(await docFile(f, 'url'), 2200, 0.9);
+    if (it.dataUrl.length > 18e6) throw new Error('File quá lớn để gửi AI (tối đa khoảng 13 MB).');
+    baoTienDo('AI đang đọc ' + (ext === 'pdf' ? 'PDF' : 'ảnh') + '…');
+    const r = await Store.docPPCTAI({ dataUrl: it.dataUrl, tenFile: f.name }, baoTienDo);
+    it.cach = 'AI · ' + (r.model || 'Gemini') + (r.qua === 'máy chủ' ? ' · qua máy chủ' : ''); const kq = ketQuaAIPPCT(r.ketQua, f.name); it.lyDo = danhGiaPPCT(kq);
+    return kq;
+  }
+  throw new Error('Chưa hỗ trợ loại file này. Dùng .docx, .xlsx, .csv, .pdf hoặc ảnh.');
+}
+function moNhapPPCT(files, idThay) {
+  const items = files.map((f, i) => ({ i, f, tt: 'cho', kq: null, loi: '', cach: '', lyDo: [], ghiChuAI: '', dich: '', ten: '', khoi: '', chon: true, gan: null, moBang: false, td: 'Đang chờ…' }));
+  const coAI = coAIHienTai();
+  const optDich = sel => `<option value="__moi" ${sel === '__moi' ? 'selected' : ''}>Môn mới</option>` + DB.mon.map(m => `<option value="${esc(m.id)}" ${m.id === sel ? 'selected' : ''}>Thay PPCT của: ${esc(m.ten)} ${m.bai.length ? '(' + m.bai.length + ' tiết)' : '(chưa có PPCT)'}</option>`).join('');
+  const the = it => {
+    const kq = it.kq, cb = kq ? kiemTraPPCT(kq.bai, kq.tongTieuDe, kq.hkTong) : [];
+    const hk1 = kq ? kq.bai.filter(b => b.hocKy === 'I').length : 0, hk2 = kq ? kq.bai.filter(b => b.hocKy === 'II').length : 0;
+    const pillTT = it.tt === 'dang' ? '<span class="pill p-info">Đang đọc</span>' : it.tt === 'loi' ? '<span class="pill p-err">Không đọc được</span>' : it.tt === 'xong' ? (kq.bai.length ? `<span class="pill p-ok">${kq.bai.length} tiết</span>` : '<span class="pill p-err">0 tiết</span>') : '<span class="pill p-muted">Chờ</span>';
+    return `<section class="card pp-item" data-pi="${it.i}"><div class="card-h"><label class="chk"><input type="checkbox" data-pp="chon" ${it.chon ? 'checked' : ''} ${it.tt !== 'xong' || !kq || !kq.bai.length ? 'disabled' : ''}> <b style="word-break:break-all">${esc(it.f.name)}</b></label>${pillTT}${it.cach ? `<span class="pill ${/^AI/.test(it.cach) ? 'p-info' : 'p-muted'}">${ic(/^AI/.test(it.cach) ? 'ai' : 'file')}${esc(it.cach)}</span>` : ''}</div>
+      <div class="card-b stack-sm">
+        ${it.tt === 'dang' || it.tt === 'cho' ? `<div class="ai-status">${it.tt === 'dang' ? '<span class="spinner"></span>' : ''}<span class="td">${esc(it.td)}</span></div>` : ''}
+        ${it.loi ? `<div class="callout err">${ic('alert')}<div>${esc(it.loi)}</div></div>` : ''}
+        ${it.ghiChuAI ? `<div class="callout warn">${ic('info')}<div>${esc(it.ghiChuAI)}</div></div>` : ''}
+        ${kq && it.tt === 'xong' ? `<div class="grid-3">
+            <label class="fld"><span>Tên môn</span><input data-pp="ten" value="${esc(it.ten)}"></label>
+            <label class="fld"><span>Khối</span><input data-pp="khoi" value="${esc(it.khoi)}" inputmode="numeric"></label>
+            <label class="fld"><span>Lưu vào</span><select data-pp="dich">${optDich(it.dich)}</select></label></div>
+          <div class="pp-gan">${htmlGan(it)}</div>
+          ${kq.tenTuFile ? `<div class="callout info">${ic('info')}<div>File không có dòng tiêu đề “Phân phối chương trình / Kế hoạch dạy học môn …” nên tên môn và khối được đoán từ tên file. Kiểm tra lại ô Tên môn và Khối.</div></div>` : ''}
+          <div class="row">${kq.bai.length ? `<span class="pill p-muted">HK I: ${hk1} · HK II: ${hk2}</span><span class="pill p-muted">${new Set(kq.bai.map(b => b.chuDe).filter(Boolean)).size} chủ đề</span>` : ''}${kq.tongTieuDe ? `<span class="pill ${kq.tongTieuDe === kq.bai.length ? 'p-ok' : 'p-warn'}">Văn bản ghi ${kq.tongTieuDe} tiết</span>` : ''}${kq.chuanHoa ? `<span class="pill p-muted">Chuẩn hóa ${kq.chuanHoa} tên bài (khoảng trắng, chữ in hoa)</span>` : ''}</div>
+          ${cb.slice(0, 3).map(x => `<div class="callout ${x.muc === 'err' ? 'err' : 'warn'}">${ic('alert')}<div>${esc(x.nd)}</div></div>`).join('')}${cb.length > 3 ? `<p class="note">… và ${cb.length - 3} cảnh báo khác (xem trong bảng tiết).</p>` : ''}
+          <div class="row"><button class="btn sm" type="button" data-pp-act="bang">${ic('grid')}${it.moBang ? 'Ẩn bảng tiết' : 'Xem bảng tiết'}</button>${coAI && it.blocks ? `<button class="btn sm" type="button" data-pp-act="ai">${ic('ai')}${/^AI/.test(it.cach) ? 'AI đọc lại' : 'Đọc lại bằng AI'}</button>` : ''}</div>
+          ${it.moBang ? bangPPCT(kq.bai) : ''}` : ''}
+        ${it.tt === 'loi' && coAI && (it.blocks || it.dataUrl) ? `<div><button class="btn sm" type="button" data-pp-act="ai">${ic('refresh')}Thử lại bằng AI</button></div>` : ''}
+      </div></section>`;
+  };
+  // "Dùng PPCT này cho các lớp khối N": tự đánh dấu khi khối chưa có môn, môn của khối chưa có PPCT, hoặc cùng tên môn; người dùng sửa tay thì giữ
+  function htmlGan(it) {
+    const g = nenGanKhoi(it.ten, it.khoi, it.dich); if (!g.hien) return '';
+    const chon = g.laNo || (it.gan == null ? g.chon : it.gan);
+    return `<label class="chk"><input type="checkbox" data-pp="gan" ${chon ? 'checked' : ''} ${g.laNo ? 'disabled' : ''}> <span>${g.laNo ? `Các lớp khối <b>${esc(it.khoi)}</b> đang dùng môn này` : `Dùng PPCT này cho các lớp khối <b>${esc(it.khoi)}</b>` + (g.mHien ? ` <span class="muted">(thay cho ${esc(g.mHien.ten)}${g.mHien.bai.length ? ', ' + g.mHien.bai.length + ' tiết' : ', chưa có PPCT'})</span>` : '')}</span></label>`;
+  }
+  const ganCuoi = it => { const g = nenGanKhoi(it.ten, it.khoi, it.dich); return g.hien && !g.laNo && (it.gan == null ? g.chon : it.gan); };
+  let w;
+  const ve = it => { const el = w && $(`[data-pi="${it.i}"]`, w); if (el) el.outerHTML = the(it); };
+  const veGan = it => { const el = w && $(`[data-pi="${it.i}"] .pp-gan`, w); if (el) el.innerHTML = htmlGan(it); };
+  const doc = async (it, epAI) => {
+    it.tt = 'dang'; it.loi = ''; it.td = epAI ? 'AI đang đọc…' : 'Đang đọc…'; ve(it);
+    try {
+      const kq = await docMotFilePPCT(it, epAI, t => { it.td = t; const el = w && $(`[data-pi="${it.i}"] .td`, w); if (el) el.textContent = t; });
+      it.kq = kq; it.ten = kq.ten; it.khoi = kq.khoi; it.dich = chonMonDich(kq, idThay); it.tt = 'xong'; it.chon = kq.bai.length > 0;
+    } catch (e) { it.tt = it.kq ? 'xong' : 'loi'; if (it.kq) it.ghiChuAI = e.message; else { it.loi = e.message; it.chon = false; } }
+    ve(it);
+  };
+  const html = `<div class="callout info">${ic('info')}<div>Bộ đọc nhanh đọc ngay các mẫu PPCT thông thường. Khi mẫu khác lạ (không nhận ra bảng, thiếu/trùng tiết, không rõ khối) ${coAI ? 'app <b>tự nhờ AI Gemini đọc lại</b>' : 'app cần AI Gemini (chưa cấu hình)'}. File PDF hoặc ảnh chụp luôn đọc bằng AI. Kiểm tra <b>Tên môn · Khối · Lưu vào</b> rồi bấm Lưu.</div></div>
+    <div class="stack" id="pp-ds">${items.map(the).join('')}</div>`;
+  moModal({
+    tieuDe: files.length > 1 ? `Nhập PPCT (${files.length} file)` : 'Nhập PPCT', noiDung: html, co: 'wide', dongBangEsc: false,
+    onMo: async ww => {
+      w = ww;
+      w.addEventListener('input', e => { const el = e.target, k = el.dataset && el.dataset.pp; if (!k || k === 'chon' || k === 'gan') return; const it = items[+el.closest('[data-pi]').dataset.pi]; it[k] = el.value.trim(); veGan(it); });
+      w.addEventListener('change', e => {
+        const el = e.target, k = el.dataset && el.dataset.pp; if (!k) return; const it = items[+el.closest('[data-pi]').dataset.pi];
+        if (k === 'chon') it.chon = el.checked; else if (k === 'gan') it.gan = el.checked; else { it[k] = el.value.trim(); if (k === 'dich') veGan(it); }
+      });
+      w.addEventListener('click', e => { const b = e.target.closest('[data-pp-act]'); if (!b) return; const it = items[+b.closest('[data-pi]').dataset.pi]; if (b.dataset.ppAct === 'bang') { it.moBang = !it.moBang; ve(it); } else doc(it, true); });
+      for (const it of items) await doc(it, false);
+    },
+    nut: [{ nhan: 'Hủy' }, {
+      nhan: 'Lưu PPCT', loai: 'primary', icon: 'save', onClick: async () => {
+        const ds = items.filter(it => it.chon && it.tt === 'xong' && it.kq && it.kq.bai.length);
+        if (items.some(it => it.tt === 'dang' || it.tt === 'cho')) { toast('Còn file đang đọc, chờ xong rồi lưu.', 'err'); return false; }
+        if (!ds.length) { toast('Chưa có file nào đọc được để lưu.', 'err'); return false; }
+        if (ds.some(it => !it.ten)) { toast('Có file chưa có tên môn.', 'err'); return false; }
+        const dich = ds.map(it => it.dich).filter(x => x !== '__moi');
+        if (new Set(dich).size !== dich.length) { toast('Hai file đang cùng lưu vào một môn. Chọn lại mục "Lưu vào".', 'err'); return false; }
+        const moi = ds.filter(it => it.dich === '__moi').map(it => khoaMon(it.ten));
+        if (new Set(moi).size !== moi.length) { toast('Hai file đang tạo cùng một môn mới. Bỏ chọn một file hoặc đổi tên môn.', 'err'); return false; }
+        dangTai(true, 'Đang lưu PPCT…');
+        const c = clone(DB.config || {}); c.phanCong = CFG().phanCong; let doiPC = [];
+        const ganKhoi = new Map(ds.map(it => [it, ganCuoi(it)]));   // tính trước khi lưu để các file sau không làm đổi kết quả
+        try {
+          for (const it of ds) {
+            let id = it.dich;
+            if (id === '__moi') { id = slug(it.ten); let k = 2; while (monTheoId(id)) id = slug(it.ten) + '-' + k++; }
+            const cu = monTheoId(id);
+            const mon = { id, ten: it.ten, khoi: it.khoi, nguon: it.f.name + (/^AI/.test(it.cach) ? ' (AI)' : ''), capNhat: new Date().toISOString(), tongTieuDe: it.kq.tongTieuDe, bai: it.kq.bai };
+            await luuMon(mon, cu);
+            const thayDoi = cu ? soSanhPPCT(cu.bai, mon.bai) : [];
+            await ghiLog('ppct', `${cu && cu.bai.length ? 'Nhập lại' : 'Nhập'} PPCT ${mon.ten} (${mon.bai.length} tiết) từ ${it.f.name} · ${it.cach}${cu && cu.bai.length ? ' · ' + thayDoi.length + ' tiết thay đổi' : ''}`, { mon: id, soTiet: mon.bai.length, cach: it.cach, canhBao: kiemTraPPCT(mon.bai, mon.tongTieuDe, it.kq.hkTong).map(x => x.nd), thayDoi: thayDoi.slice(0, 60) });
+            const truoc = c.phanCong.khoi[it.khoi] || '';
+            if (ganKhoi.get(it) && truoc !== id) { c.phanCong.khoi[it.khoi] = id; doiPC.push(`khối ${it.khoi} → ${mon.ten}${truoc ? ' (trước đây: ' + tenMon(truoc) + ')' : ''}`); }
+          }
+          if (doiPC.length) { DB.config = c; daThayDoi(); await luu('config', c); await ghiLog('ppct', 'Phân công: ' + doiPC.join('; '), {}); }
+        } finally { dangTai(false); }
+        render(); toast(`Đã lưu ${ds.length} PPCT${doiPC.length ? ' · phân công ' + doiPC.join('; ') : ''}.`, 'ok');
+      }
+    }]
+  });
 }
 function bangPPCT(bai) {
   let cd = null, rows = '';
@@ -2466,39 +2778,6 @@ function bangPPCT(bai) {
     rows += `<tr><td class="c num">${b.tiet}</td><td class="c num">${b.tuan ?? ''}</td><td class="c">${esc(b.hocKy)}</td><td>${esc(b.ten)}${loaiBai(b.ten) ? ` <span class="chip ${loaiBai(b.ten)}">${loaiBai(b.ten) === 'kt' ? 'Kiểm tra' : 'Ôn tập'}</span>` : ''}</td><td>${esc(b.ghiChu)}</td></tr>`;
   });
   return `<div class="tbl-wrap" style="max-height:52vh;overflow:auto;border:1px solid var(--line);border-radius:var(--r-sm)"><table class="tbl ppct-table"><thead><tr><th class="c">Tiết</th><th class="c">Tuần</th><th class="c">HK</th><th>Tên bài</th><th>Ghi chú</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-}
-function moXemTruocPPCT(kq, tenFile, idThay) {
-  const cb = kiemTraPPCT(kq.bai, kq.tongTieuDe);
-  const trung = idThay || (DB.mon.find(m => m.id === slug(kq.ten) || boDau(m.ten) === boDau(kq.ten)) || {}).id || '';
-  const hk1 = kq.bai.filter(b => b.hocKy === 'I').length, hk2 = kq.bai.filter(b => b.hocKy === 'II').length;
-  const soCD = new Set(kq.bai.map(b => b.chuDe).filter(Boolean)).size;
-  const html = `<div class="grid-3">
-      <label class="fld"><span>Tên môn</span><input id="pp-ten" value="${esc(kq.ten)}"></label>
-      <label class="fld"><span>Khối</span><input id="pp-khoi" value="${esc(kq.khoi)}" inputmode="numeric"></label>
-      <label class="fld"><span>Lưu vào</span><select id="pp-dich"><option value="__moi">Môn mới</option>${DB.mon.map(m => `<option value="${esc(m.id)}" ${m.id === trung ? 'selected' : ''}>Thay PPCT của: ${esc(m.ten)}</option>`).join('')}</select></label></div>
-    <div class="row"><span class="pill p-info">${kq.bai.length} tiết</span><span class="pill p-muted">HK I: ${hk1} · HK II: ${hk2}</span>${soCD ? `<span class="pill p-muted">${soCD} chủ đề</span>` : ''}${kq.tongTieuDe ? `<span class="pill ${kq.tongTieuDe === kq.bai.length ? 'p-ok' : 'p-warn'}">Tiêu đề: ${kq.tongTieuDe} tiết</span>` : ''}${kq.chuanHoa ? `<span class="pill p-muted">Đã chuẩn hóa khoảng trắng ${kq.chuanHoa} tên bài</span>` : ''}</div>
-    ${cb.map(x => `<div class="callout ${x.muc === 'err' ? 'err' : 'warn'}">${ic('alert')}<div>${esc(x.nd)}</div></div>`).join('') || `<div class="callout ok">${ic('check')}<div>Không phát hiện lỗi: số tiết liên tục, tên bài thống nhất.</div></div>`}
-    ${bangPPCT(kq.bai)}`;
-  moModal({
-    tieuDe: 'Xem trước PPCT từ ' + tenFile, noiDung: html, co: 'mid', nut: [{ nhan: 'Hủy' }, {
-      nhan: 'Lưu PPCT', loai: 'primary', icon: 'save', onClick: async w => {
-        const ten = $('#pp-ten', w).value.trim(); const khoi = $('#pp-khoi', w).value.trim(); const dich = $('#pp-dich', w).value;
-        if (!ten) { toast('Nhập tên môn.', 'err'); return false; }
-        let id = dich;
-        if (dich === '__moi') { id = slug(ten); let k = 2; while (monTheoId(id)) id = slug(ten) + '-' + k++; }
-        const cu = monTheoId(id);
-        const mon = { id, ten, khoi, nguon: tenFile, capNhat: new Date().toISOString(), tongTieuDe: kq.tongTieuDe, bai: kq.bai };
-        await luuMon(mon, cu);
-        const thayDoi = cu ? soSanhPPCT(cu.bai, mon.bai) : [];
-        await ghiLog('ppct', `${cu ? 'Nhập lại' : 'Nhập'} PPCT ${ten} (${mon.bai.length} tiết) từ ${tenFile}${cu ? ' · ' + thayDoi.length + ' tiết thay đổi' : ''}`, { mon: id, soTiet: mon.bai.length, canhBao: cb.map(x => x.nd), thayDoi: thayDoi.slice(0, 60) });
-        if (khoi && !CFG().phanCong.khoi[khoi]) {
-          const c = clone(DB.config || {}); c.phanCong = CFG().phanCong; c.phanCong.khoi[khoi] = id; DB.config = c; daThayDoi(); await luu('config', c);
-          await ghiLog('ppct', `Phân công: khối ${khoi} → ${ten}`, { khoi, mon: id });
-        }
-        render(); toast('Đã lưu PPCT ' + ten, 'ok');
-      }
-    }]
-  });
 }
 async function luuMon(mon, cu) {
   if (cu) DB.mon = DB.mon.map(m => m.id === mon.id ? mon : m); else DB.mon.push(mon);
@@ -2647,7 +2926,8 @@ function vCaiDat() {
       <div class="row"><button class="btn" data-act="doi-mk">${ic('lock')}Đổi mật khẩu</button>${Store.mayChu ? `<button class="btn" data-act="kiem-tra-may-chu">${ic('check')}Kiểm tra máy chủ</button>` : ''}${API_URL_MAC_DINH ? '' : `<button class="btn" data-act="doi-may-chu">${ic('server')}${Store.mayChu ? 'Đổi máy chủ' : 'Chuyển sang máy chủ'}</button>`}<button class="btn" data-act="dang-xuat">${ic('out')}Đăng xuất</button></div>
     </div></section>
     <section class="card"><div class="card-h"><h3>Nhận dạng ảnh bằng AI</h3></div><div class="card-b stack">
-      ${Store.mayChu ? `<p class="small">Khóa Gemini API được cài trên máy chủ (Google Sheet → menu <b>Lịch báo giảng › Cài khóa Gemini API</b>) nên không lộ ra trang GitHub.</p>`
+      ${Store.mayChu ? `<p class="small">Khóa Gemini API được cài trên máy chủ (Google Sheet → menu <b>Lịch báo giảng › Cài khóa Gemini API</b>), không nằm trong trang GitHub.</p>
+      <p class="small">Khi đọc ảnh TKB hoặc PPCT, trình duyệt của bạn (đã đăng nhập) nhận khóa từ máy chủ và gọi Gemini trực tiếp, vì Gemini hay báo quá tải với yêu cầu từ máy chủ Apps Script. Nếu trình duyệt không gọi được, máy chủ tự đọc thay. Menu <b>Thử kết nối Gemini từ máy chủ</b> trong Google Sheet cho biết máy chủ đang gọi được mô hình nào.</p>`
         : `<p class="small">Ở chế độ dùng thử, khóa lưu trên trình duyệt này. Lấy khóa miễn phí tại <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>.</p>
       <label class="fld"><span>Khóa Gemini API</span><input id="ai-key" type="password" value="${esc(g.key || '')}" autocomplete="off" placeholder="AIza…"></label>
       <label class="fld"><span>Mô hình <small>(để trống = tự chọn)</small></span><input id="ai-model" value="${esc(g.model || '')}" placeholder="gemini-3.8-flash"></label>
@@ -2939,7 +3219,7 @@ async function doiMatKhau() {
         if (a !== b) { toast('Hai lần nhập mật khẩu mới không khớp.', 'err'); return false; }
         await ghiLog('he-thong', 'Đổi mật khẩu quản trị', {});
         await Store.doiMatKhau(cu, a);
-        if (Store.mayChu) { SS.del('lbg_token'); LS.del('lbg_token_nho'); Store.token = ''; hienDangNhap('Đã đổi mật khẩu. Hãy đăng nhập lại bằng mật khẩu mới.'); }
+        if (Store.mayChu) { SS.del('lbg_token'); LS.del('lbg_token_nho'); Store.token = ''; Store.khoaAI = null; hienDangNhap('Đã đổi mật khẩu. Hãy đăng nhập lại bằng mật khẩu mới.'); }
         else toast('Đã đổi mật khẩu.', 'ok');
       }
     }]
